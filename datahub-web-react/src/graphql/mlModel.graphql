@@ -1,25 +1,36 @@
 query getMLModel($urn: String!) {
     mlModel(urn: $urn) {
         ...nonRecursiveMLModel
-        incoming: relationships(
-            input: {
-                types: ["DownstreamOf", "Consumes", "Produces", "TrainedBy", "MemberOf"]
-                direction: INCOMING
-                start: 0
-                count: 100
+        features: relationships(input: { types: ["Consumes"], direction: OUTGOING, start: 0, count: 100 }) {
+            start
+            count
+            total
+            relationships {
+                type
+                direction
+                entity {
+                    ... on MLFeature {
+                        ...nonRecursiveMLFeature
+                    }
+                    ... on MLPrimaryKey {
+                        ...nonRecursiveMLPrimaryKey
+                    }
+                }
             }
-        ) {
-            ...fullRelationshipResults
         }
-        outgoing: relationships(
-            input: {
-                types: ["DownstreamOf", "Consumes", "Produces", "TrainedBy", "MemberOf"]
-                direction: OUTGOING
-                start: 0
-                count: 100
+        privileges {
+            ...entityPrivileges
+        }
+        autoRenderAspects: aspects(input: { autoRenderOnly: true }) {
+            ...autoRenderAspectFields
+        }
+        structuredProperties {
+            properties {
+                ...structuredPropertiesFields
             }
-        ) {
-            ...fullRelationshipResults
+        }
+        forms {
+            ...formsFields
         }
     }
 }

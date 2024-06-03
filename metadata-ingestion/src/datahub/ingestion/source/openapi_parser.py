@@ -1,14 +1,12 @@
 import json
+import logging
 import re
-import time
-import warnings
-from typing import Any, Dict, Generator, List, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import requests
 import yaml
 from requests.auth import HTTPBasicAuth
 
-from datahub.metadata.com.linkedin.pegasus2avro.common import AuditStamp
 from datahub.metadata.com.linkedin.pegasus2avro.schema import (
     OtherSchemaClass,
     SchemaField,
@@ -16,13 +14,15 @@ from datahub.metadata.com.linkedin.pegasus2avro.schema import (
 )
 from datahub.metadata.schema_classes import SchemaFieldDataTypeClass, StringTypeClass
 
+logger = logging.getLogger(__name__)
+
 
 def flatten(d: dict, prefix: str = "") -> Generator:
     for k, v in d.items():
         if isinstance(v, dict):
-            yield from flatten(v, prefix + "." + k)
+            yield from flatten(v, f"{prefix}.{k}")
         else:
-            yield (prefix + "-" + k).strip(".")
+            yield f"{prefix}-{k}".strip(".")
 
 
 def flatten2list(d: dict) -> list:
@@ -47,55 +47,58 @@ def flatten2list(d: dict) -> list:
 
 
 def request_call(
-    url: str, token: str = None, username: str = None, password: str = None
+    url: str,
+    token: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    proxies: Optional[dict] = None,
 ) -> requests.Response:
-
     headers = {"accept": "application/json"}
-
     if username is not None and password is not None:
-        response = requests.get(
+        return requests.get(
             url, headers=headers, auth=HTTPBasicAuth(username, password)
         )
     elif token is not None:
-        headers["Authorization"] = "Bearer " + token
-        response = requests.get(url, headers=headers)
+        headers["Authorization"] = f"{token}"
+        return requests.get(url, proxies=proxies, headers=headers)
     else:
-        response = requests.get(url, headers=headers)
-    return response
+        return requests.get(url, headers=headers)
 
 
 def get_swag_json(
     url: str,
-    token: str = None,
-    username: str = None,
-    password: str = None,
+    token: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
     swagger_file: str = "",
+    proxies: Optional[dict] = None,
 ) -> Dict:
     tot_url = url + swagger_file
-    if token is not None:
-        response = request_call(url=tot_url, token=token)
-    else:
-        response = request_call(url=tot_url, username=username, password=password)
+    response = request_call(
+        url=tot_url, token=token, username=username, password=password, proxies=proxies
+    )
 
-    if response.status_code == 200:
-        try:
-            dict_data = json.loads(response.content)
-        except json.JSONDecodeError:  # it's not a JSON!
-            dict_data = yaml.safe_load(response.content)
-        return dict_data
-    else:
+    if response.status_code != 200:
         raise Exception(f"Unable to retrieve {tot_url}, error {response.status_code}")
+    try:
+        dict_data = json.loads(response.content)
+    except json.JSONDecodeError:  # it's not a JSON!
+        dict_data = yaml.safe_load(response.content)
+    return dict_data
 
 
 def get_url_basepath(sw_dict: dict) -> str:
-    try:
+    if "basePath" in sw_dict:
         return sw_dict["basePath"]
-    except KeyError:  # no base path defined
-        return ""
+    if "servers" in sw_dict:
+        # When the API path doesn't match the OAS path
+        return sw_dict["servers"][0]["url"]
+
+    return ""
 
 
 def check_sw_version(sw_dict: dict) -> None:
-    if "swagger" in sw_dict.keys():
+    if "swagger" in sw_dict:
         v_split = sw_dict["swagger"].split(".")
     else:
         v_split = sw_dict["openapi"].split(".")
@@ -103,76 +106,85 @@ def check_sw_version(sw_dict: dict) -> None:
     version = [int(v) for v in v_split]
 
     if version[0] == 3 and version[1] > 0:
-        raise NotImplementedError(
-            "This plugin is not compatible with Swagger version >3.0"
+        logger.warning(
+            "This plugin has not been fully tested with Swagger version >3.0"
         )
 
 
 def get_endpoints(sw_dict: dict) -> dict:  # noqa: C901
     """
-    Get all the URLs accepting the "GET" method, together with their description and the tags
+    Get all the URLs, together with their description and the tags
     """
     url_details = {}
 
     check_sw_version(sw_dict)
 
     for p_k, p_o in sw_dict["paths"].items():
-        # will track only the "get" methods, which are the ones that give us data
-        if "get" in p_o.keys():
+        method = list(p_o)[0]
+        if "200" in p_o[method]["responses"].keys():
+            base_res = p_o[method]["responses"]["200"]
+        elif 200 in p_o[method]["responses"].keys():
+            # if you read a plain yml file the 200 will be an integer
+            base_res = p_o[method]["responses"][200]
+        else:
+            # the endpoint does not have a 200 response
+            continue
 
-            try:
-                base_res = p_o["get"]["responses"]["200"]
-            except KeyError:  # if you read a plain yml file the 200 will be an integer
-                base_res = p_o["get"]["responses"][200]
+        if "description" in p_o[method].keys():
+            desc = p_o[method]["description"]
+        elif "summary" in p_o[method].keys():
+            desc = p_o[method]["summary"]
+        else:  # still testing
+            desc = ""
 
-            if "description" in p_o["get"].keys():
-                desc = p_o["get"]["description"]
-            elif "summary" in p_o["get"].keys():
-                desc = p_o["get"]["summary"]
-            else:  # still testing
-                desc = ""
+        try:
+            tags = p_o[method]["tags"]
+        except KeyError:
+            tags = []
 
-            try:
-                tags = p_o["get"]["tags"]
-            except KeyError:
-                tags = []
+        url_details[p_k] = {"description": desc, "tags": tags, "method": method}
 
-            url_details[p_k] = {"description": desc, "tags": tags}
+        example_data = check_for_api_example_data(base_res, p_k)
+        if example_data:
+            url_details[p_k]["data"] = example_data
 
-            # trying if dataset is defined in swagger...
-            if "content" in base_res.keys():
-                res_cont = base_res["content"]
-                if "application/json" in res_cont.keys():
-                    ex_field = None
-                    if "example" in res_cont["application/json"]:
-                        ex_field = "example"
-                    elif "examples" in res_cont["application/json"]:
-                        ex_field = "examples"
+        # checking whether there are defined parameters to execute the call...
+        if "parameters" in p_o[method].keys():
+            url_details[p_k]["parameters"] = p_o[method]["parameters"]
 
-                    if ex_field:
-                        if isinstance(res_cont["application/json"][ex_field], dict):
-                            url_details[p_k]["data"] = res_cont["application/json"][
-                                ex_field
-                            ]
-                        elif isinstance(res_cont["application/json"][ex_field], list):
-                            # taking the first example
-                            url_details[p_k]["data"] = res_cont["application/json"][
-                                ex_field
-                            ][0]
-                    else:
-                        warnings.warn(
-                            f"Field in swagger file does not give consistent data --- {p_k}"
-                        )
-                elif "text/csv" in res_cont.keys():
-                    url_details[p_k]["data"] = res_cont["text/csv"]["schema"]
-            elif "examples" in base_res.keys():
-                url_details[p_k]["data"] = base_res["examples"]["application/json"]
+    return dict(sorted(url_details.items()))
 
-            # checking whether there are defined parameters to execute the call...
-            if "parameters" in p_o["get"].keys():
-                url_details[p_k]["parameters"] = p_o["get"]["parameters"]
 
-    return url_details
+def check_for_api_example_data(base_res: dict, key: str) -> dict:
+    """
+    Try to determine if example data is defined for the endpoint, and return it
+    """
+    data = {}
+    if "content" in base_res.keys():
+        res_cont = base_res["content"]
+        if "application/json" in res_cont.keys():
+            ex_field = None
+            if "example" in res_cont["application/json"]:
+                ex_field = "example"
+            elif "examples" in res_cont["application/json"]:
+                ex_field = "examples"
+
+            if ex_field:
+                if isinstance(res_cont["application/json"][ex_field], dict):
+                    data = res_cont["application/json"][ex_field]
+                elif isinstance(res_cont["application/json"][ex_field], list):
+                    # taking the first example
+                    data = res_cont["application/json"][ex_field][0]
+            else:
+                logger.warning(
+                    f"Field in swagger file does not give consistent data --- {key}"
+                )
+        elif "text/csv" in res_cont.keys():
+            data = res_cont["text/csv"]["schema"]
+    elif "examples" in base_res.keys():
+        data = base_res["examples"]["application/json"]
+
+    return data
 
 
 def guessing_url_name(url: str, examples: dict) -> str:
@@ -182,10 +194,7 @@ def guessing_url_name(url: str, examples: dict) -> str:
     extr_data = {"advancedcomputersearches": {'id': 202, 'name': '_unmanaged'}}
     -->> guessed_url = /advancedcomputersearches/name/_unmanaged/id/202'
     """
-    if url[0] == "/":
-        url2op = url[1:]  # operational url does not need the very first /
-    else:
-        url2op = url
+    url2op = url[1:] if url[0] == "/" else url
     divisions = url2op.split("/")
 
     # the very first part of the url should stay the same.
@@ -206,11 +215,15 @@ def guessing_url_name(url: str, examples: dict) -> str:
             if div_pos > 0:
                 root = root[: div_pos - 1]  # like "base/field" should become "base"
 
-    if root in examples.keys():
+    if root in examples:
         # if our root is contained in our samples examples...
         ex2use = root
-    elif root[:-1] in examples.keys():
+    elif root[:-1] in examples:
         ex2use = root[:-1]
+    elif root.replace("/", ".") in examples:
+        ex2use = root.replace("/", ".")
+    elif root[:-1].replace("/", ".") in examples:
+        ex2use = root[:-1].replace("/", ".")
     else:
         return url
 
@@ -237,7 +250,7 @@ def compose_url_attr(raw_url: str, attr_list: list) -> str:
                            attr_list=["2",])
     asd2 == "http://asd.com/2"
     """
-    splitted = re.split(r"\{[^}]+\}", raw_url)
+    splitted = re.split(r"\{[^}]+}", raw_url)
     if splitted[-1] == "":  # it can happen that the last element is empty
         splitted = splitted[:-1]
     composed_url = ""
@@ -251,7 +264,7 @@ def compose_url_attr(raw_url: str, attr_list: list) -> str:
 
 
 def maybe_theres_simple_id(url: str) -> str:
-    dets = re.findall(r"(\{[^}]+\})", url)  # searching the fields between parenthesis
+    dets = re.findall(r"(\{[^}]+})", url)  # searching the fields between parenthesis
     if len(dets) == 0:
         return url
     dets_w_id = [det for det in dets if "id" in det]  # the fields containing "id"
@@ -268,8 +281,7 @@ def try_guessing(url: str, examples: dict) -> str:
     Any non-guessed name will stay as it was (with parenthesis{})
     """
     url_guess = guessing_url_name(url, examples)  # try to fill with known informations
-    url_guess_id = maybe_theres_simple_id(url_guess)  # try to fill IDs with "1"s...
-    return url_guess_id
+    return maybe_theres_simple_id(url_guess)
 
 
 def clean_url(url: str) -> str:
@@ -294,12 +306,12 @@ def extract_fields(
     dict_data = json.loads(response.content)
     if isinstance(dict_data, str):
         # no sense
-        warnings.warn(f"Empty data --- {dataset_name}")
+        logger.warning(f"Empty data --- {dataset_name}")
         return [], {}
     elif isinstance(dict_data, list):
         # it's maybe just a list
         if len(dict_data) == 0:
-            warnings.warn(f"Empty data --- {dataset_name}")
+            logger.warning(f"Empty data --- {dataset_name}")
             return [], {}
         # so we take the fields of the first element,
         # if it's a dict
@@ -310,12 +322,10 @@ def extract_fields(
             return ["contains_a_string"], {"contains_a_string": dict_data[0]}
         else:
             raise ValueError("unknown format")
-    if len(dict_data.keys()) > 1:
+    if len(dict_data) > 1:
         # the elements are directly inside the dict
         return flatten2list(dict_data), dict_data
-    dst_key = list(dict_data.keys())[
-        0
-    ]  # the first and unique key is the dataset's name
+    dst_key = list(dict_data)[0]  # the first and unique key is the dataset's name
 
     try:
         return flatten2list(dict_data[dst_key]), dict_data[dst_key]
@@ -328,23 +338,46 @@ def extract_fields(
             else:
                 return [], {}  # it's empty!
         else:
-            warnings.warn(f"Unable to get the attributes --- {dataset_name}")
+            logger.warning(f"Unable to get the attributes --- {dataset_name}")
             return [], {}
 
 
-def get_tok(url: str, username: str = "", password: str = "") -> str:
+def get_tok(
+    url: str,
+    username: str = "",
+    password: str = "",
+    tok_url: str = "",
+    method: str = "post",
+    proxies: Optional[dict] = None,
+) -> str:
     """
     Trying to post username/password to get auth.
-    Simplified version: it expect a POST at api/authenticate
     """
-    data = {"username": username, "password": password}
-    url2post = url + "api/authenticate/"
-    response = requests.post(url2post, data=data)
-    if response.status_code == 200:
-        cont = json.loads(response.content)
-        return cont["tokens"]["access"]
+    token = ""
+    url4req = url + tok_url
+    if method == "post":
+        # this will make a POST call with username and password
+        data = {"username": username, "password": password, "maxDuration": True}
+        # url2post = url + "api/authenticate/"
+        response = requests.post(url4req, proxies=proxies, json=data)
+        if response.status_code == 200:
+            cont = json.loads(response.content)
+            if "token" in cont:  # other authentication scheme
+                token = cont["token"]
+            else:  # works only for bearer authentication scheme
+                token = f"Bearer {cont['tokens']['access']}"
+    elif method == "get":
+        # this will make a GET call with username and password
+        response = requests.get(url4req)
+        if response.status_code == 200:
+            cont = json.loads(response.content)
+            token = cont["token"]
     else:
-        raise Exception("Unable to get a valid token")
+        raise ValueError(f"Method unrecognised: {method}")
+    if token != "":
+        return token
+    else:
+        raise Exception(f"Unable to get a valid token: {response.text}")
 
 
 def set_metadata(
@@ -362,16 +395,12 @@ def set_metadata(
         )
         canonical_schema.append(field)
 
-    actor = "urn:li:corpuser:etl"
-    sys_time = int(time.time() * 1000)
     schema_metadata = SchemaMetadata(
         schemaName=dataset_name,
         platform=f"urn:li:dataPlatform:{platform}",
         version=0,
         hash="",
         platformSchema=OtherSchemaClass(rawSchema=""),
-        created=AuditStamp(time=sys_time, actor=actor),
-        lastModified=AuditStamp(time=sys_time, actor=actor),
         fields=canonical_schema,
     )
     return schema_metadata

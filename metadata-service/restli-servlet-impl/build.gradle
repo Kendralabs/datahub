@@ -1,5 +1,7 @@
-apply plugin: 'java'
-apply plugin: 'pegasus'
+plugins {
+  id 'java-library'
+  id 'pegasus'
+}
 
 sourceSets {
   integTest {
@@ -11,7 +13,7 @@ sourceSets {
 idea {
   module {
     testSourceDirs += file('src/integTest/java')
-    scopes.TEST.plus += [ configurations.integTestCompile ]
+    scopes.TEST.plus += [ configurations.integTestCompileOnly ]
   }
 }
 
@@ -19,46 +21,59 @@ idea {
 configurations {
   integTestImplementation.extendsFrom implementation
   integTestRuntimeOnly.extendsFrom runtimeOnly
+  integTestCompileOnly {
+    extendsFrom compileOnly
+    canBeResolved = true
+  }
   modelValidation
 }
 
 dependencies {
-  compile project(':metadata-service:restli-api')
-  compile project(path: ':metadata-service:restli-api', configuration: 'dataTemplate')
-  compile project(':li-utils')
-  compile project(':metadata-models')
-  compile project(':metadata-utils')
-  compile project(':metadata-io')
-  compile spec.product.pegasus.restliServer
-  compile externalDependency.lombok
-  compile externalDependency.gmaDaoApi
-  compile externalDependency.gmaDaoApiDataTemplate
-  compile externalDependency.gmaEbeanDao
-  compile externalDependency.gmaElasticsearchDao
-  compile externalDependency.gmaNeo4jDao
-  compile externalDependency.gmaRestliResources
-  compile externalDependency.gmaRestliResourcesDataTemplate
-  compile externalDependency.neo4jJavaDriver
-  compile externalDependency.opentelemetryAnnotations
+  constraints {
+    implementation(externalDependency.log4jCore) {
+        because("previous versions are vulnerable to CVE-2021-45105")
+    }
+    implementation(externalDependency.log4jApi) {
+        because("previous versions are vulnerable to CVE-2021-45105")
+    }
+  }
+
+  implementation project(':metadata-service:restli-api')
+  implementation project(':metadata-auth:auth-api')
+  implementation project(path: ':metadata-service:restli-api', configuration: 'dataTemplate')
+  implementation project(':li-utils')
+  implementation project(':metadata-models')
+  implementation project(':metadata-utils')
+  implementation project(':metadata-io')
+  implementation spec.product.pegasus.restliServer
+  implementation externalDependency.slf4jApi
+  implementation externalDependency.dropwizardMetricsCore
+  implementation externalDependency.dropwizardMetricsJmx
+
+  implementation externalDependency.lombok
+  implementation externalDependency.neo4jJavaDriver
+  implementation externalDependency.opentelemetryAnnotations
+
+  runtimeOnly externalDependency.logbackClassic
 
   annotationProcessor externalDependency.lombok
 
-  testCompile project(':metadata-testing:metadata-test-utils')
-  testCompile externalDependency.parseqTest
-  testCompile externalDependency.mockito
-  testCompile externalDependency.testng
+  testImplementation project(':test-models')
+  testImplementation project(path: ':test-models', configuration: 'testDataTemplate')
+  testImplementation project(':mock-entity-registry')
+  testImplementation externalDependency.mockito
+  testImplementation externalDependency.mockitoInline
+  testImplementation externalDependency.testng
 
   integTestImplementation externalDependency.junitJupiterApi
   integTestRuntimeOnly externalDependency.junitJupiterEngine
 
-  integTestCompile externalDependency.gmaElasticsearchIntegTest
-  integTestCompile externalDependency.junitJupiterApi
-  integTestCompile externalDependency.junitJupiterParams
+  integTestCompileOnly externalDependency.junitJupiterApi
+  integTestCompileOnly externalDependency.junitJupiterParams
 
   modelValidation project(path: ':metadata-models-validator')
   dataModel project(path: ':metadata-models', configuration: 'dataTemplate')
   dataModel project(path: ':li-utils', configuration: 'dataTemplate')
-
 }
 
 task integrationTest(type: Test) {

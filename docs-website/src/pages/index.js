@@ -4,12 +4,12 @@ import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import CodeBlock from "@theme/CodeBlock";
 
-import Hero from "../components/Hero";
-import Features from "../components/Features";
-import Section from "../components/Section";
-import { PlatformLogos, CompanyLogos } from "../components/Logos";
-import RoundedImage from "../components/RoundedImage";
-import AnnouncementSection from "../components/AnnouncementSection";
+import Hero from "./_components/Hero";
+import Features from "./_components/Features";
+import Quotes from "./_components/Quotes";
+import { Section, PromoSection } from "./_components/Section";
+import { PlatformLogos, CompanyLogos } from "./_components/Logos";
+import RoundedImage from "./_components/RoundedImage";
 
 const example_recipe = `
 source:
@@ -28,15 +28,59 @@ function Home() {
   const context = useDocusaurusContext();
   const { siteConfig = {} } = context;
 
-  return (
+  if (siteConfig.customFields.isSaas) {
+    window.location.replace("/docs");
+  }
+
+  return !siteConfig.customFields.isSaas ? (
     <Layout
       title={siteConfig.tagline}
-      description="DataHub is a data discovery application built on an extensible metadata platform that helps you tame the complexity of diverse data ecosystems."
+      description="DataHub is a data discovery application built on an extensible data catalog that helps you tame the complexity of diverse data ecosystems."
     >
       <Hero />
       <Features />
+      <Section>
+        <div className="container">
+          <div className="row row--centered">
+            <div className="col col--6">
+              <div>
+                <iframe
+                  style={{
+                    display: "block",
+                    margin: "0 auto",
+                    borderRadius: "0.4rem",
+                  }}
+                  width="620"
+                  height="320"
+                  src="https://www.youtube.com/embed/oxNzH40m5E0"
+                  frameBorder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  title="Intro Video"
+                />
+              </div>
+            </div>
+            <div className="col col--5 col--offset-1">
+              <h1
+                style={{
+                  width: "18rem",
+                }}
+              >
+                The Origins of DataHub
+              </h1>
+              {/* <hr style={{ border: "2px solid black", width: "20rem" }}></hr> */}
+              <p style={{ fontSize: "18px" }}>
+                Explore DataHub's journey from search and data discovery tool at
+                LinkedIn to the #1 open source metadata management platform,
+                through the lens of its founder and some amazing community
+                members.
+              </p>
+            </div>
+          </div>
+        </div>
+      </Section>
       <PlatformLogos />
-      <Section title="How it Works" withBackground>
+      <Section title="A Modern Approach to Metadata Management" withBackground>
         <div className="container">
           <div className="row row--padded row--centered">
             <div className="col col--5">
@@ -100,8 +144,8 @@ function Home() {
               </h2>
               <p>
                 DataHub is the one-stop shop for documentation, schemas,
-                ownership, lineage, pipelines and usage information. Data
-                quality and data preview information coming soon.
+                ownership, data lineage, pipelines, data quality, usage
+                information, and more.
               </p>
             </div>
             <div className="col col--6 col--offset-1">
@@ -115,10 +159,10 @@ function Home() {
       </Section>
       <Section title="Trusted Across the Industry">
         <CompanyLogos />
+        <Quotes />
       </Section>
-      <AnnouncementSection />
     </Layout>
-  );
+  ) : null;
 }
 
 export default Home;

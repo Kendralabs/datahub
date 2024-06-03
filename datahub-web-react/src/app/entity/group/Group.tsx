@@ -13,20 +13,20 @@ export class GroupEntity implements Entity<CorpGroup> {
     type: EntityType = EntityType.CorpGroup;
 
     // TODO: update icons for UserGroup
-    icon = (fontSize: number, styleType: IconStyleType) => {
+    icon = (fontSize: number, styleType: IconStyleType, color?: string) => {
         if (styleType === IconStyleType.TAB_VIEW) {
-            return <TeamOutlined style={{ fontSize }} />;
+            return <TeamOutlined style={{ fontSize, color }} />;
         }
 
         if (styleType === IconStyleType.HIGHLIGHT) {
-            return <TeamOutlined style={{ fontSize }} />;
+            return <TeamOutlined style={{ fontSize, color }} />;
         }
 
         return (
             <TeamOutlined
                 style={{
                     fontSize,
-                    color: '#BFBFBF',
+                    color: color || '#BFBFBF',
                 }}
             />
         );
@@ -51,9 +51,9 @@ export class GroupEntity implements Entity<CorpGroup> {
     renderPreview = (_: PreviewType, data: CorpGroup) => (
         <Preview
             urn={data.urn}
-            name={data.info?.displayName || data.name || ''}
+            name={this.displayName(data)}
             description={data.info?.description}
-            membersCount={data?.relationships?.total || 0}
+            membersCount={(data as any)?.memberCount?.total || 0}
         />
     );
 
@@ -62,10 +62,14 @@ export class GroupEntity implements Entity<CorpGroup> {
     };
 
     displayName = (data: CorpGroup) => {
-        return data.info?.displayName || data.name;
+        return data.properties?.displayName || data.info?.displayName || data.name || data.urn;
     };
 
     getGenericEntityProperties = (group: CorpGroup) => {
         return getDataForEntityType({ data: group, entityType: this.type, getOverrideProperties: (data) => data });
+    };
+
+    supportedCapabilities = () => {
+        return new Set([]);
     };
 }

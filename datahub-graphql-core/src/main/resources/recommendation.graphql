@@ -23,6 +23,11 @@ input ListRecommendationsInput {
   Max number of modules to return
   """
   limit: Int
+
+  """
+  Optional - A View to apply when generating results
+  """
+  viewUrn: String
 }
 
 """
@@ -42,7 +47,12 @@ enum ScenarioType {
   """
   Recommendations to show on an Entity Profile page
   """
-  ENTITY_PROFILE
+  ENTITY_PROFILE,
+
+  """
+  Recommendations to show on the search bar when clicked
+  """
+  SEARCH_BAR
 }
 
 """
@@ -158,6 +168,11 @@ enum RecommendationRenderType {
   Glossary Term search list
   """
   GLOSSARY_TERM_SEARCH_LIST
+
+  """
+  Domain Search List
+  """
+  DOMAIN_SEARCH_LIST
 }
 
 """
@@ -207,7 +222,7 @@ type SearchParams {
   """
   Entity types to be searched. If this is not provided, all entities will be searched.
   """
-	types: [EntityType!]
+  types: [EntityType!]
 
   """
   Search query
@@ -217,22 +232,7 @@ type SearchParams {
   """
   Filters
   """
-  filters: [Filter!]
-}
-
-"""
-Facet filters to apply to search results
-"""
-type Filter {
-  """
-  Name of field to filter by
-  """
-	field: String!
-
-	"""
-	Value of the field to filter by
-	"""
-	value: String!
+  filters: [FacetFilter!]
 }
 
 """
@@ -243,6 +243,12 @@ type EntityProfileParams {
   Urn of the entity being shown
   """
   urn: String!
+
+  """
+  Type of the enity being displayed
+  """
+  type: EntityType!
+
 }
 
 """

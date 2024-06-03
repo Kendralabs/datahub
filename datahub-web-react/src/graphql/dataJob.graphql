@@ -1,23 +1,24 @@
 query getDataJob($urn: String!) {
     dataJob(urn: $urn) {
         ...dataJobFields
-        parentFlow: relationships(input: { types: ["IsPartOf"], direction: OUTGOING, start: 0, count: 1 }) {
-            ...fullRelationshipResults
+        privileges {
+            ...entityPrivileges
         }
-        incoming: relationships(
-            input: {
-                types: ["DownstreamOf", "Consumes", "Produces", "TrainedBy"]
-                direction: INCOMING
-                start: 0
-                count: 100
+        runs(start: 0, count: 20) {
+            count
+            start
+            total
+        }
+        autoRenderAspects: aspects(input: { autoRenderOnly: true }) {
+            ...autoRenderAspectFields
+        }
+        structuredProperties {
+            properties {
+                ...structuredPropertiesFields
             }
-        ) {
-            ...fullRelationshipResults
         }
-        outgoing: relationships(
-            input: { types: ["DownstreamOf", "Consumes", "Produces"], direction: OUTGOING, start: 0, count: 100 }
-        ) {
-            ...fullRelationshipResults
+        forms {
+            ...formsFields
         }
     }
 }
@@ -25,5 +26,13 @@ query getDataJob($urn: String!) {
 mutation updateDataJob($urn: String!, $input: DataJobUpdateInput!) {
     updateDataJob(urn: $urn, input: $input) {
         urn
+    }
+}
+
+query getDataJobRuns($urn: String!, $start: Int!, $count: Int!) {
+    dataJob(urn: $urn) {
+        runs(start: $start, count: $count) {
+            ...runResults
+        }
     }
 }

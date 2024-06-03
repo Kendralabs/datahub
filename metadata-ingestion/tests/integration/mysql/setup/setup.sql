@@ -24,7 +24,7 @@ insert into metadata_aspect (urn, aspect, version, metadata, createdon, createdb
   'urn:li:corpuser:datahub',
   'com.linkedin.identity.CorpUserEditableInfo',
   0,
-  '{"skills":[],"teams":[],"pictureLink":"https://raw.githubusercontent.com/linkedin/datahub/master/datahub-web-react/src/images/default_avatar.png"}',
+  '{"skills":[],"teams":[],"pictureLink":"https://raw.githubusercontent.com/datahub-project/datahub/master/datahub-web-react/src/images/default_avatar.png"}',
   now(),
   'urn:li:corpuser:__datahub_system'
 );
@@ -48,13 +48,13 @@ CREATE TABLE metadata_index (
 CREATE VIEW metadata_index_view AS SELECT id, urn, path, doubleVal FROM metadata_index;
 
 -- -----------------------------------------------------
--- Some sample data, from https://github.com/datacharmer/test_db.
+-- Some sample data, from https://github.com/dataCharmer/test_db.
 -- -----------------------------------------------------
 
-CREATE SCHEMA IF NOT EXISTS `datacharmer` ;
-USE `datacharmer` ;
+CREATE SCHEMA IF NOT EXISTS `dataCharmer` ;
+USE `dataCharmer` ;
 
-CREATE TABLE `datacharmer`.`employees` (
+CREATE TABLE `dataCharmer`.`employees` (
     emp_no      INT             NOT NULL,
     birth_date  DATE            NOT NULL,
     first_name  VARCHAR(14)     NOT NULL,
@@ -64,7 +64,7 @@ CREATE TABLE `datacharmer`.`employees` (
     PRIMARY KEY (emp_no)
 );
 
-CREATE TABLE `datacharmer`.`salaries` (
+CREATE TABLE `dataCharmer`.`salaries` (
     emp_no      INT             NOT NULL,
     salary      INT             NOT NULL,
     from_date   DATE            NOT NULL,
@@ -249,11 +249,11 @@ USE `northwind`;
 # Dumping data for table 'customers'
 #
 
-INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (1, 'Company A', 'Bedecs', 'Anna', NULL, 4);
-INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (2, 'Company B', 'Gratacos Solsona', 'Antonio', NULL, 4.9);
-INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (3, 'Company C', 'Axen', 'Thomas', NULL, 4);
-INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (4, 'Company D', 'Lee', 'Christina', NULL, 3.8);
-INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (5, 'Company E', 'Donnell', 'Martin', NULL, NULL);
+INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (1, 'Company A', 'Bedecs', 'Anna', 'Bedecs@xyz.com', 4);
+INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (2, 'Company B', 'Gratacos Solsona', 'Antonio', 'Gratacos@xyz.com', 4.9);
+INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (3, 'Company C', 'Axen', 'Thomas', 'Axen@xyz.com', 4);
+INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (4, 'Company D', 'Lee', 'Christina', 'Lee@xyz.com', 3.8);
+INSERT INTO `customers` (`id`, `company`, `last_name`, `first_name`, `email_address`, `priority`) VALUES (5, 'Company E', 'Donnell', 'Martin', 'Donnell@xyz.com', NULL);
 # 5 records
 
 -- -----------------------------------------------------
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS `test_cases`.`test_empty` (
 ENGINE = InnoDB
 DEFAULT CHARACTER SET = utf8;
 
-
+CREATE TABLE IF NOT EXISTS `test_cases`.`myset` (col SET('a', 'b', 'c', 'd'));
 
 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS;
 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS;

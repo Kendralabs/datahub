@@ -1,25 +1,37 @@
 import { DashboardFilled, DashboardOutlined } from '@ant-design/icons';
 import * as React from 'react';
+
 import {
     GetDashboardQuery,
     useGetDashboardQuery,
     useUpdateDashboardMutation,
 } from '../../../graphql/dashboard.generated';
-import { Dashboard, EntityType, PlatformType, SearchResult } from '../../../types.generated';
-import { EntityAndType } from '../../lineage/types';
-import { getLogoFromPlatform } from '../../shared/getLogoFromPlatform';
-import { Entity, IconStyleType, PreviewType } from '../Entity';
+import { Dashboard, EntityType, LineageDirection, OwnershipType, SearchResult } from '../../../types.generated';
+import { Entity, EntityCapabilityType, IconStyleType, PreviewType } from '../Entity';
 import { EntityProfile } from '../shared/containers/profile/EntityProfile';
-import { SidebarOwnerSection } from '../shared/containers/profile/sidebar/Ownership/SidebarOwnerSection';
-import { SidebarAboutSection } from '../shared/containers/profile/sidebar/SidebarAboutSection';
+import { SidebarOwnerSection } from '../shared/containers/profile/sidebar/Ownership/sidebar/SidebarOwnerSection';
+import { SidebarAboutSection } from '../shared/containers/profile/sidebar/AboutSection/SidebarAboutSection';
 import { SidebarTagsSection } from '../shared/containers/profile/sidebar/SidebarTagsSection';
 import { DocumentationTab } from '../shared/tabs/Documentation/DocumentationTab';
 import { DashboardChartsTab } from '../shared/tabs/Entity/DashboardChartsTab';
+import { DashboardDatasetsTab } from '../shared/tabs/Entity/DashboardDatasetsTab';
 import { PropertiesTab } from '../shared/tabs/Properties/PropertiesTab';
 import { GenericEntityProperties } from '../shared/types';
 import { DashboardPreview } from './preview/DashboardPreview';
 import { getDataForEntityType } from '../shared/containers/profile/utils';
-import { capitalizeFirstLetter } from '../../shared/capitalizeFirstLetter';
+import { SidebarDomainSection } from '../shared/containers/profile/sidebar/Domain/SidebarDomainSection';
+import { EntityMenuItems } from '../shared/EntityDropdown/EntityDropdown';
+import { LineageTab } from '../shared/tabs/Lineage/LineageTab';
+import { capitalizeFirstLetterOnly } from '../../shared/textUtil';
+import { DashboardStatsSummarySubHeader } from './profile/DashboardStatsSummarySubHeader';
+import { EmbedTab } from '../shared/tabs/Embed/EmbedTab';
+import EmbeddedProfile from '../shared/embed/EmbeddedProfile';
+import DataProductSection from '../shared/containers/profile/sidebar/DataProduct/DataProductSection';
+import { getDataProduct } from '../shared/utils';
+import { LOOKER_URN } from '../../ingest/source/builder/constants';
+import { MatchedFieldList } from '../../search/matches/MatchedFieldList';
+import { matchedInputFieldRenderer } from '../../search/matches/matchedInputFieldRenderer';
+import { IncidentTab } from '../shared/tabs/Incident/IncidentTab';
 
 /**
  * Definition of the DataHub Dashboard entity.
@@ -27,13 +39,13 @@ import { capitalizeFirstLetter } from '../../shared/capitalizeFirstLetter';
 export class DashboardEntity implements Entity<Dashboard> {
     type: EntityType = EntityType.Dashboard;
 
-    icon = (fontSize: number, styleType: IconStyleType) => {
+    icon = (fontSize: number, styleType: IconStyleType, color?: string) => {
         if (styleType === IconStyleType.TAB_VIEW) {
-            return <DashboardOutlined style={{ fontSize }} />;
+            return <DashboardOutlined style={{ fontSize, color }} />;
         }
 
         if (styleType === IconStyleType.HIGHLIGHT) {
-            return <DashboardFilled style={{ fontSize, color: 'rgb(144 163 236)' }} />;
+            return <DashboardFilled style={{ fontSize, color: color || 'rgb(144 163 236)' }} />;
         }
 
         if (styleType === IconStyleType.SVG) {
@@ -46,7 +58,7 @@ export class DashboardEntity implements Entity<Dashboard> {
             <DashboardOutlined
                 style={{
                     fontSize,
-                    color: '#BFBFBF',
+                    color: color || '#BFBFBF',
                 }}
             />
         );
@@ -66,99 +78,179 @@ export class DashboardEntity implements Entity<Dashboard> {
 
     getCollectionName = () => 'Dashboards';
 
+    useEntityQuery = useGetDashboardQuery;
+
+    getSidebarSections = () => [
+        {
+            component: SidebarAboutSection,
+        },
+        {
+            component: SidebarOwnerSection,
+            properties: {
+                defaultOwnerType: OwnershipType.TechnicalOwner,
+            },
+        },
+        {
+            component: SidebarTagsSection,
+            properties: {
+                hasTags: true,
+                hasTerms: true,
+            },
+        },
+        {
+            component: SidebarDomainSection,
+        },
+        {
+            component: DataProductSection,
+        },
+    ];
+
     renderProfile = (urn: string) => (
         <EntityProfile
             urn={urn}
             entityType={EntityType.Dashboard}
-            useEntityQuery={useGetDashboardQuery}
+            useEntityQuery={this.useEntityQuery}
             useUpdateQuery={useUpdateDashboardMutation}
             getOverrideProperties={this.getOverridePropertiesFromEntity}
+            headerDropdownItems={new Set([EntityMenuItems.UPDATE_DEPRECATION, EntityMenuItems.RAISE_INCIDENT])}
+            subHeader={{
+                component: DashboardStatsSummarySubHeader,
+            }}
             tabs={[
+                {
+                    name: 'Charts',
+                    component: DashboardChartsTab,
+                    display: {
+                        visible: (_, dashboard: GetDashboardQuery) =>
+                            (dashboard?.dashboard?.charts?.total || 0) > 0 ||
+                            (dashboard?.dashboard?.datasets?.total || 0) === 0,
+                        enabled: (_, dashboard: GetDashboardQuery) => (dashboard?.dashboard?.charts?.total || 0) > 0,
+                    },
+                },
+                {
+                    name: 'Datasets',
+                    component: DashboardDatasetsTab,
+                    display: {
+                        visible: (_, dashboard: GetDashboardQuery) => (dashboard?.dashboard?.datasets?.total || 0) > 0,
+                        enabled: (_, dashboard: GetDashboardQuery) => (dashboard?.dashboard?.datasets?.total || 0) > 0,
+                    },
+                },
                 {
                     name: 'Documentation',
                     component: DocumentationTab,
+                },
+                {
+                    name: 'Preview',
+                    component: EmbedTab,
+                    display: {
+                        visible: (_, dashboard: GetDashboardQuery) =>
+                            !!dashboard?.dashboard?.embed?.renderUrl &&
+                            dashboard?.dashboard?.platform.urn === LOOKER_URN,
+                        enabled: (_, dashboard: GetDashboardQuery) =>
+                            !!dashboard?.dashboard?.embed?.renderUrl &&
+                            dashboard?.dashboard?.platform.urn === LOOKER_URN,
+                    },
+                },
+                {
+                    name: 'Lineage',
+                    component: LineageTab,
+                    properties: {
+                        defaultDirection: LineageDirection.Upstream,
+                    },
                 },
                 {
                     name: 'Properties',
                     component: PropertiesTab,
                 },
                 {
-                    name: 'Charts',
-                    component: DashboardChartsTab,
-                    display: {
-                        visible: (_, _1) => true,
-                        enabled: (_, dashboard: GetDashboardQuery) => (dashboard?.dashboard?.charts?.total || 0) > 0,
+                    name: 'Incidents',
+                    component: IncidentTab,
+                    getDynamicName: (_, dashboard) => {
+                        const activeIncidentCount = dashboard?.dashboard?.activeIncidents.total;
+                        return `Incidents${(activeIncidentCount && ` (${activeIncidentCount})`) || ''}`;
                     },
                 },
             ]}
-            sidebarSections={[
-                {
-                    component: SidebarAboutSection,
-                },
-                {
-                    component: SidebarTagsSection,
-                    properties: {
-                        hasTags: true,
-                        hasTerms: true,
-                    },
-                },
-                {
-                    component: SidebarOwnerSection,
-                },
-            ]}
+            sidebarSections={this.getSidebarSections()}
         />
     );
 
     getOverridePropertiesFromEntity = (dashboard?: Dashboard | null): GenericEntityProperties => {
         // TODO: Get rid of this once we have correctly formed platform coming back.
-        const tool = dashboard?.tool || '';
         const name = dashboard?.properties?.name;
         const externalUrl = dashboard?.properties?.externalUrl;
+        const subTypes = dashboard?.subTypes;
         return {
             name,
             externalUrl,
-            platform: {
-                urn: `urn:li:dataPlatform:(${tool})`,
-                type: EntityType.DataPlatform,
-                name: tool,
-                info: {
-                    logoUrl: getLogoFromPlatform(tool),
-                    displayName: capitalizeFirstLetter(tool),
-                    type: PlatformType.Others,
-                    datasetNameDelimiter: '.',
-                },
-            },
+            entityTypeOverride: subTypes ? capitalizeFirstLetterOnly(subTypes.typeNames?.[0]) : '',
         };
     };
 
     renderPreview = (_: PreviewType, data: Dashboard) => {
+        const genericProperties = this.getGenericEntityProperties(data);
         return (
             <DashboardPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data?.platform?.properties?.displayName || capitalizeFirstLetterOnly(data?.platform?.name)}
                 name={data.properties?.name}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
                 tags={data.globalTags || undefined}
                 owners={data.ownership?.owners}
                 glossaryTerms={data?.glossaryTerms}
+                logoUrl={data?.platform?.properties?.logoUrl}
+                domain={data.domain?.domain}
+                dataProduct={getDataProduct(genericProperties?.dataProduct)}
+                container={data.container}
+                parentContainers={data.parentContainers}
+                deprecation={data.deprecation}
+                externalUrl={data.properties?.externalUrl}
+                statsSummary={data.statsSummary}
+                lastUpdatedMs={data.properties?.lastModified?.time}
+                createdMs={data.properties?.created?.time}
+                subtype={data.subTypes?.typeNames?.[0]}
+                health={data.health}
             />
         );
     };
 
     renderSearch = (result: SearchResult) => {
         const data = result.entity as Dashboard;
+        const genericProperties = this.getGenericEntityProperties(data);
+
         return (
             <DashboardPreview
                 urn={data.urn}
-                platform={data.tool}
+                platform={data?.platform?.properties?.displayName || capitalizeFirstLetterOnly(data?.platform?.name)}
                 name={data.properties?.name}
+                platformInstanceId={data.dataPlatformInstance?.instanceId}
                 description={data.editableProperties?.description || data.properties?.description}
                 access={data.properties?.access}
                 tags={data.globalTags || undefined}
                 owners={data.ownership?.owners}
                 glossaryTerms={data?.glossaryTerms}
                 insights={result.insights}
+                logoUrl={data?.platform?.properties?.logoUrl || ''}
+                domain={data.domain?.domain}
+                dataProduct={getDataProduct(genericProperties?.dataProduct)}
+                container={data.container}
+                parentContainers={data.parentContainers}
+                deprecation={data.deprecation}
+                externalUrl={data.properties?.externalUrl}
+                statsSummary={data.statsSummary}
+                lastUpdatedMs={data.properties?.lastModified?.time}
+                createdMs={data.properties?.created?.time}
+                snippet={
+                    <MatchedFieldList
+                        customFieldRenderer={(matchedField) => matchedInputFieldRenderer(matchedField, data)}
+                        matchSuffix="on a contained chart"
+                    />
+                }
+                subtype={data.subTypes?.typeNames?.[0]}
+                degree={(result as any).degree}
+                paths={(result as any).paths}
+                health={data.health}
             />
         );
     };
@@ -166,15 +258,12 @@ export class DashboardEntity implements Entity<Dashboard> {
     getLineageVizConfig = (entity: Dashboard) => {
         return {
             urn: entity.urn,
-            name: entity.properties?.name || '',
+            name: entity.properties?.name || entity.urn,
             type: EntityType.Dashboard,
-            // eslint-disable-next-line @typescript-eslint/dot-notation
-            upstreamChildren: entity?.['charts']?.relationships?.map(
-                (relationship) => ({ entity: relationship.entity, type: relationship.entity.type } as EntityAndType),
-            ),
-            downstreamChildren: undefined,
-            icon: getLogoFromPlatform(entity.tool),
-            platform: entity.tool,
+            subtype: entity?.subTypes?.typeNames?.[0] || undefined,
+            icon: entity?.platform?.properties?.logoUrl || undefined,
+            platform: entity?.platform,
+            health: entity?.health || undefined,
         };
     };
 
@@ -189,4 +278,25 @@ export class DashboardEntity implements Entity<Dashboard> {
             getOverrideProperties: this.getOverridePropertiesFromEntity,
         });
     };
+
+    supportedCapabilities = () => {
+        return new Set([
+            EntityCapabilityType.OWNERS,
+            EntityCapabilityType.GLOSSARY_TERMS,
+            EntityCapabilityType.TAGS,
+            EntityCapabilityType.DOMAINS,
+            EntityCapabilityType.DEPRECATION,
+            EntityCapabilityType.SOFT_DELETE,
+            EntityCapabilityType.DATA_PRODUCTS,
+        ]);
+    };
+
+    renderEmbeddedProfile = (urn: string) => (
+        <EmbeddedProfile
+            urn={urn}
+            entityType={EntityType.Dashboard}
+            useEntityQuery={this.useEntityQuery}
+            getOverrideProperties={this.getOverridePropertiesFromEntity}
+        />
+    );
 }

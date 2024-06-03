@@ -1,12 +1,29 @@
 import importlib
 import inspect
-from typing import Any, Dict, Generic, Type, TypeVar, Union
+import sys
+import unittest.mock
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+)
 
-import entrypoints
 import typing_inspect
 
 from datahub import __package_name__
 from datahub.configuration.common import ConfigurationError
+
+if sys.version_info < (3, 10):
+    from importlib_metadata import entry_points
+else:
+    from importlib.metadata import entry_points
 
 T = TypeVar("T")
 
@@ -17,10 +34,15 @@ def _is_importable(path: str) -> bool:
 
 def import_path(path: str) -> Any:
     """
-    Import an item from a package, where the path is formatted as 'package.module.submodule.ClassName'
+    Import an item from a package, as specified by the import path.
+
+    The path is formatted as 'package.module.submodule.ClassName'
     or 'package.module.submodule:ClassName.classmethod'. The dot-based format assumes that the bit
     after the last dot is the item to be fetched. In cases where the item to be imported is embedded
     within another type, the colon-based syntax can be used to disambiguate.
+
+    This method also adds the current working directory to the path so that we can import local
+    modules. We add it to the end of the path so that global modules take precedence.
     """
     assert _is_importable(path), "path must be in the appropriate format"
 
@@ -29,17 +51,27 @@ def import_path(path: str) -> Any:
     else:
         module_name, object_name = path.rsplit(".", 1)
 
-    item = importlib.import_module(module_name)
+    # Add the current working directory to the path so that we can import local modules.
+    with unittest.mock.patch("sys.path", [*sys.path, ""]):
+        item = importlib.import_module(module_name)
+
     for attr in object_name.split("."):
         item = getattr(item, attr)
     return item
 
 
 class PluginRegistry(Generic[T]):
+    _entrypoints: List[str]
     _mapping: Dict[str, Union[str, Type[T], Exception]]
+    _aliases: Dict[str, Tuple[str, Callable[[], None]]]
 
-    def __init__(self) -> None:
+    def __init__(
+        self, extra_cls_check: Optional[Callable[[Type[T]], None]] = None
+    ) -> None:
+        self._entrypoints = []
         self._mapping = {}
+        self._aliases = {}
+        self._extra_cls_check = extra_cls_check
 
     def _get_registered_type(self) -> Type[T]:
         cls = typing_inspect.get_generic_type(self)
@@ -55,6 +87,8 @@ class PluginRegistry(Generic[T]):
         super_cls = self._get_registered_type()
         if not issubclass(cls, super_cls):
             raise ValueError(f"must be derived from {super_cls}; got {cls}")
+        if self._extra_cls_check is not None:
+            self._extra_cls_check(cls)
 
     def _register(
         self, key: str, tp: Union[str, Type[T], Exception], override: bool = False
@@ -77,48 +111,62 @@ class PluginRegistry(Generic[T]):
     ) -> None:
         self._register(key, reason, override=override)
 
+    def register_alias(
+        self, alias: str, real_key: str, fn: Callable[[], None] = lambda: None
+    ) -> None:
+        self._aliases[alias] = (real_key, fn)
+
     def _ensure_not_lazy(self, key: str) -> Union[Type[T], Exception]:
+        self._materialize_entrypoints()
+
         path = self._mapping[key]
-        if isinstance(path, str):
-            try:
-                plugin_class = import_path(path)
-                self.register(key, plugin_class, override=True)
-                return plugin_class
-            except (AssertionError, ModuleNotFoundError, ImportError) as e:
-                self.register_disabled(key, e, override=True)
-                return e
-        else:
+        if not isinstance(path, str):
             return path
+        try:
+            plugin_class = import_path(path)
+            self.register(key, plugin_class, override=True)
+            return plugin_class
+        except Exception as e:
+            self.register_disabled(key, e, override=True)
+            return e
 
     def is_enabled(self, key: str) -> bool:
+        self._materialize_entrypoints()
+
         tp = self._mapping[key]
         return not isinstance(tp, Exception)
 
-    def register_from_entrypoint(self, entry_point_key: str, lazy: bool = True) -> None:
-        entry_point: entrypoints.EntryPoint
-        for entry_point in entrypoints.get_group_all(entry_point_key):
-            name = entry_point.name
+    def register_from_entrypoint(self, entry_point_key: str) -> None:
+        self._entrypoints.append(entry_point_key)
 
-            if entry_point.object_name is None:
-                path = entry_point.module_name
-            else:
-                path = f"{entry_point.module_name}:{entry_point.object_name}"
+    def _load_entrypoint(self, entry_point_key: str) -> None:
+        for entry_point in entry_points(group=entry_point_key):
+            self.register_lazy(entry_point.name, entry_point.value)
 
-            self.register_lazy(name, path)
-            if not lazy:
-                self._ensure_not_lazy(name)
+    def _materialize_entrypoints(self) -> None:
+        for entry_point_key in self._entrypoints:
+            self._load_entrypoint(entry_point_key)
+        self._entrypoints = []
 
     @property
     def mapping(self) -> Dict[str, Union[str, Type[T], Exception]]:
+        self._materialize_entrypoints()
         return self._mapping
 
     def get(self, key: str) -> Type[T]:
+        self._materialize_entrypoints()
+
         if _is_importable(key):
             # If the key contains a dot or colon, we treat it as a import path and attempt
             # to load it dynamically.
             MyClass = import_path(key)
             self._check_cls(MyClass)
             return MyClass
+
+        if key in self._aliases:
+            real_key, fn = self._aliases[key]
+            fn()
+            return self.get(real_key)
 
         if key not in self._mapping:
             raise KeyError(f"Did not find a registered class for {key}")
@@ -136,9 +184,17 @@ class PluginRegistry(Generic[T]):
             # If it's not an exception, then it's a registered type.
             return tp
 
+    def get_optional(self, key: str) -> Optional[Type[T]]:
+        try:
+            return self.get(key)
+        except Exception:
+            return None
+
     def summary(
         self, verbose: bool = True, col_width: int = 15, verbose_col_width: int = 20
     ) -> str:
+        self._materialize_entrypoints()
+
         lines = []
         for key in sorted(self._mapping.keys()):
             # We want to attempt to load all plugins before printing a summary.

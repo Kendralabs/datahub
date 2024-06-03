@@ -79,42 +79,6 @@ basicAuditStamp = models.AuditStampClass(
             },
         ),
         (
-            # Verify the behavior of the fieldDiscriminator for primitive enums.
-            models.MetadataChangeEventClass(
-                proposedSnapshot=models.MLModelSnapshotClass(
-                    urn="urn:li:mlModel:(urn:li:dataPlatform:science,scienceModel,PROD)",
-                    aspects=[
-                        models.CostClass(
-                            costType=models.CostTypeClass.ORG_COST_TYPE,
-                            cost=models.CostCostClass(
-                                fieldDiscriminator=models.CostCostDiscriminatorClass.costCode,
-                                costCode="sampleCostCode",
-                            ),
-                        )
-                    ],
-                )
-            ),
-            "/entities?action=ingest",
-            {
-                "entity": {
-                    "value": {
-                        "com.linkedin.metadata.snapshot.MLModelSnapshot": {
-                            "urn": "urn:li:mlModel:(urn:li:dataPlatform:science,scienceModel,PROD)",
-                            "aspects": [
-                                {
-                                    "com.linkedin.common.Cost": {
-                                        "costType": "ORG_COST_TYPE",
-                                        "cost": {"costCode": "sampleCostCode"},
-                                    }
-                                }
-                            ],
-                        }
-                    }
-                },
-                "systemMetadata": {},
-            },
-        ),
-        (
             # Verify the serialization behavior with chart type enums.
             models.MetadataChangeEventClass(
                 proposedSnapshot=models.ChartSnapshotClass(
@@ -249,10 +213,7 @@ basicAuditStamp = models.AuditStampClass(
         ),
         (
             MetadataChangeProposalWrapper(
-                entityType="dataset",
                 entityUrn="urn:li:dataset:(urn:li:dataPlatform:foo,bar,PROD)",
-                changeType=models.ChangeTypeClass.UPSERT,
-                aspectName="ownership",
                 aspect=models.OwnershipClass(
                     owners=[
                         models.OwnerClass(
@@ -274,7 +235,7 @@ basicAuditStamp = models.AuditStampClass(
                     "changeType": "UPSERT",
                     "aspectName": "ownership",
                     "aspect": {
-                        "value": '{"owners": [{"owner": "urn:li:corpuser:fbar", "type": "DATAOWNER"}], "lastModified": {"time": 0, "actor": "urn:li:corpuser:fbar"}}',
+                        "value": '{"owners": [{"owner": "urn:li:corpuser:fbar", "type": "DATAOWNER"}], "ownerTypes": {}, "lastModified": {"time": 0, "actor": "urn:li:corpuser:fbar"}}',
                         "contentType": "application/json",
                     },
                 }

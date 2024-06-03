@@ -1,47 +1,27 @@
-import React, { useMemo, useState } from 'react';
-import { Group } from '@vx/group';
-import { LinkHorizontal } from '@vx/shape';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { Group } from '@visx/group';
+import { LinkHorizontal } from '@visx/shape';
 import styled from 'styled-components';
 
 import { useEntityRegistry } from '../useEntityRegistry';
 import { IconStyleType } from '../entity/Entity';
-import { NodeData, Direction, VizNode, EntitySelectParams } from './types';
+import { Direction, VizNode, EntitySelectParams, EntityAndType, UpdatedLineages } from './types';
 import { ANTD_GRAY } from '../entity/shared/constants';
-import { capitalizeFirstLetter } from '../shared/capitalizeFirstLetter';
+import { capitalizeFirstLetterOnly } from '../shared/textUtil';
+import { getShortenedTitle, nodeHeightFromTitleLength } from './utils/titleUtils';
+import { LineageExplorerContext } from './utils/LineageExplorerContext';
+import { useGetEntityLineageLazyQuery } from '../../graphql/lineage.generated';
+import { useIsSeparateSiblingsMode } from '../entity/shared/siblingUtils';
+import { centerX, centerY, iconHeight, iconWidth, iconX, iconY, textX, width, healthX, healthY } from './constants';
+import LineageEntityColumns from './LineageEntityColumns';
+import { convertInputFieldsToSchemaFields } from './utils/columnLineageUtils';
+import ManageLineageMenu from './manage/ManageLineageMenu';
+import { useGetLineageTimeParams } from './utils/useGetLineageTimeParams';
+import { EntityHealth } from '../entity/shared/containers/profile/header/EntityHealth';
+import { EntityType } from '../../types.generated';
 
 const CLICK_DELAY_THRESHOLD = 1000;
 const DRAG_DISTANCE_THRESHOLD = 20;
-
-function truncate(input, length) {
-    if (!input) return '';
-    if (input.length > length) {
-        return `${input.substring(0, length)}...`;
-    }
-    return input;
-}
-
-function getLastTokenOfTitle(title?: string): string {
-    if (!title) return '';
-
-    const lastToken = title?.split('.').slice(-1)[0];
-
-    // if the last token does not contain any content, the string should not be tokenized on `.`
-    if (lastToken.replace(/\s/g, '').length === 0) {
-        return title;
-    }
-
-    return lastToken;
-}
-
-export const width = 212;
-export const height = 80;
-const iconWidth = 32;
-const iconHeight = 32;
-const iconX = -width / 2 + 22;
-const iconY = -iconHeight / 2;
-const centerX = -width / 2;
-const centerY = -height / 2;
-const textX = iconX + iconWidth + 8;
 
 const PointerGroup = styled(Group)`
     cursor: pointer;
@@ -49,6 +29,13 @@ const PointerGroup = styled(Group)`
 
 const UnselectableText = styled.text`
     user-select: none;
+`;
+
+const MultilineTitleText = styled.p`
+    margin-top: -2px;
+    font-size: 14px;
+    width: 125px;
+    word-break: break-all;
 `;
 
 export default function LineageEntityNode({
@@ -60,11 +47,11 @@ export default function LineageEntityNode({
     onHover,
     onDrag,
     onExpandClick,
-    direction,
     isCenterNode,
     nodesToRenderByUrn,
+    setUpdatedLineages,
 }: {
-    node: { x: number; y: number; data: Omit<NodeData, 'children'> };
+    node: VizNode;
     isSelected: boolean;
     isHovered: boolean;
     isCenterNode: boolean;
@@ -72,12 +59,57 @@ export default function LineageEntityNode({
     onEntityCenter: (EntitySelectParams) => void;
     onHover: (EntitySelectParams) => void;
     onDrag: (params: EntitySelectParams, event: React.MouseEvent) => void;
-    onExpandClick: (LineageExpandParams) => void;
-    direction: Direction;
+    onExpandClick: (data: EntityAndType) => void;
     nodesToRenderByUrn: Record<string, VizNode>;
+    setUpdatedLineages: React.Dispatch<React.SetStateAction<UpdatedLineages>>;
 }) {
+    const { direction } = node;
+    const { expandTitles, collapsedColumnsNodes, showColumns, refetchCenterNode } = useContext(LineageExplorerContext);
+    const { startTimeMillis, endTimeMillis } = useGetLineageTimeParams();
+    const [hasExpanded, setHasExpanded] = useState(false);
     const [isExpanding, setIsExpanding] = useState(false);
     const [expandHover, setExpandHover] = useState(false);
+    const [getAsyncEntityLineage, { data: asyncLineageData, loading }] = useGetEntityLineageLazyQuery();
+    const isHideSiblingMode = useIsSeparateSiblingsMode();
+    const areColumnsCollapsed = !!collapsedColumnsNodes[node?.data?.urn || 'noop'];
+    const isRestricted = node.data.type === EntityType.Restricted;
+
+    function fetchEntityLineage() {
+        if (node.data.urn) {
+            if (isCenterNode) {
+                refetchCenterNode();
+            } else {
+                // update non-center node using onExpandClick in useEffect below
+                getAsyncEntityLineage({
+                    variables: {
+                        urn: node.data.urn,
+                        separateSiblings: isHideSiblingMode,
+                        showColumns,
+                        startTimeMillis,
+                        endTimeMillis,
+                    },
+                });
+                setTimeout(() => setHasExpanded(false), 0);
+            }
+        }
+    }
+
+    const centerEntity = () => {
+        if (!isRestricted) {
+            onEntityCenter({ urn: node.data.urn, type: node.data.type });
+        }
+    };
+
+    useEffect(() => {
+        if (asyncLineageData && asyncLineageData.entity && !hasExpanded && !loading) {
+            const entityAndType = {
+                type: asyncLineageData.entity.type,
+                entity: { ...asyncLineageData.entity },
+            } as EntityAndType;
+            onExpandClick(entityAndType);
+            setHasExpanded(true);
+        }
+    }, [asyncLineageData, onExpandClick, hasExpanded, loading]);
 
     const entityRegistry = useEntityRegistry();
     const unexploredHiddenChildren =
@@ -93,6 +125,30 @@ export default function LineageEntityNode({
         }),
         [],
     );
+
+    let platformDisplayText =
+        node.data.platform?.properties?.displayName || capitalizeFirstLetterOnly(node.data.platform?.name);
+    if (node.data.siblingPlatforms && !isHideSiblingMode) {
+        platformDisplayText = node.data.siblingPlatforms
+            .map((platform) => platform.properties?.displayName || capitalizeFirstLetterOnly(platform.name))
+            .join(' & ');
+    }
+
+    const nodeHeight = nodeHeightFromTitleLength(
+        expandTitles ? node.data.expandedName || node.data.name : undefined,
+        node.data.schemaMetadata?.fields || convertInputFieldsToSchemaFields(node.data.inputFields),
+        showColumns,
+        areColumnsCollapsed,
+    );
+
+    const entityName =
+        capitalizeFirstLetterOnly(node.data.subtype) ||
+        (node.data.type && entityRegistry.getEntityName(node.data.type));
+
+    // Health
+    const { health } = node.data;
+    const baseUrl = node.data.type && node.data.urn && entityRegistry.getEntityUrl(node.data.type, node.data.urn);
+    const hasHealth = (health && baseUrl) || false;
 
     return (
         <PointerGroup data-testid={`node-${node.data.urn}-${direction}`} top={node.x} left={node.y}>
@@ -127,7 +183,18 @@ export default function LineageEntityNode({
                     <Group
                         onClick={() => {
                             setIsExpanding(true);
-                            onExpandClick({ urn: node.data.urn, type: node.data.type, direction });
+                            if (node.data.urn && node.data.type) {
+                                // getAsyncEntity(node.data.urn, node.data.type);
+                                getAsyncEntityLineage({
+                                    variables: {
+                                        urn: node.data.urn,
+                                        separateSiblings: isHideSiblingMode,
+                                        showColumns,
+                                        startTimeMillis,
+                                        endTimeMillis,
+                                    },
+                                });
+                            }
                         }}
                         onMouseOver={() => {
                             setExpandHover(true);
@@ -139,13 +206,13 @@ export default function LineageEntityNode({
                     >
                         <circle
                             fill="none"
-                            cy={centerY + height / 2}
+                            cy={centerY + nodeHeight / 2}
                             cx={direction === Direction.Upstream ? centerX - 10 : centerX + width + 10}
                             r="20"
                         />
                         <circle
                             fill="none"
-                            cy={centerY + height / 2}
+                            cy={centerY + nodeHeight / 2}
                             cx={direction === Direction.Upstream ? centerX - 30 : centerX + width + 30}
                             r="30"
                         />
@@ -172,7 +239,7 @@ export default function LineageEntityNode({
                     </g>
                 ))}
             <Group
-                onDoubleClick={() => onEntityCenter({ urn: node.data.urn, type: node.data.type })}
+                onDoubleClick={centerEntity}
                 onClick={(event) => {
                     if (
                         event.timeStamp < lastMouseDownCoordinates.ts + CLICK_DELAY_THRESHOLD &&
@@ -200,7 +267,7 @@ export default function LineageEntityNode({
                 }}
             >
                 <rect
-                    height={height}
+                    height={nodeHeight}
                     width={width}
                     y={centerY}
                     x={centerX}
@@ -215,23 +282,63 @@ export default function LineageEntityNode({
                     // eslint-disable-next-line react/style-prop-object
                     style={{ filter: isSelected ? 'url(#shadow1-selected)' : 'url(#shadow1)' }}
                 />
-                {node.data.icon ? (
+                {node.data.siblingPlatforms && !isHideSiblingMode && (
+                    <svg x={iconX} y={iconY - 5}>
+                        <image
+                            // preserveAspectRatio="none"
+                            y={0}
+                            height={iconHeight * (3 / 4)}
+                            width={iconWidth * (3 / 4)}
+                            href={node.data.siblingPlatforms[0]?.properties?.logoUrl || ''}
+                            clipPath="url(#clipPolygonTop)"
+                        />
+                        <image
+                            // preserveAspectRatio="none"
+                            y={25}
+                            height={iconHeight * (3 / 4)}
+                            width={iconWidth * (3 / 4)}
+                            clipPath="url(#clipPolygon)"
+                            href={node.data.siblingPlatforms[1]?.properties?.logoUrl || ''}
+                        />
+                    </svg>
+                )}
+                {(!node.data.siblingPlatforms || isHideSiblingMode) && node.data.icon && (
                     <image href={node.data.icon} height={iconHeight} width={iconWidth} x={iconX} y={iconY} />
-                ) : (
-                    node.data.type && (
-                        <svg
-                            viewBox="64 64 896 896"
-                            focusable="false"
-                            x={iconX}
-                            y={iconY}
-                            height={iconHeight}
-                            width={iconWidth}
-                            fill="currentColor"
-                            aria-hidden="true"
-                        >
-                            {entityRegistry.getIcon(node.data.type, 16, IconStyleType.SVG)}
-                        </svg>
-                    )
+                )}
+                {!node.data.icon && (!node.data.siblingPlatforms || isHideSiblingMode) && node.data.type && (
+                    <svg
+                        viewBox="64 64 896 896"
+                        focusable="false"
+                        x={iconX}
+                        y={iconY}
+                        height={iconHeight}
+                        width={iconWidth}
+                        fill="currentColor"
+                        aria-hidden="true"
+                    >
+                        {entityRegistry.getIcon(node.data.type, 16, IconStyleType.SVG)}
+                    </svg>
+                )}
+                {!isRestricted && (
+                    <foreignObject
+                        x={-centerX - 25}
+                        y={centerY + 20}
+                        width={20}
+                        height={20}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <ManageLineageMenu
+                            entityUrn={node.data.urn || ''}
+                            refetchEntity={fetchEntityLineage}
+                            setUpdatedLineages={setUpdatedLineages}
+                            disableUpstream={!isCenterNode && direction === Direction.Downstream}
+                            disableDownstream={!isCenterNode && direction === Direction.Upstream}
+                            centerEntity={() => onEntityCenter({ urn: node.data.urn, type: node.data.type })}
+                            entityType={node.data.type}
+                            entityPlatform={node.data.platform?.name}
+                            canEditLineage={node.data.canEditLineage}
+                        />
+                    </foreignObject>
                 )}
                 <Group>
                     <UnselectableText
@@ -243,25 +350,45 @@ export default function LineageEntityNode({
                         textAnchor="start"
                         fill="#8C8C8C"
                     >
-                        <tspan>{truncate(capitalizeFirstLetter(node.data.platform), 16)}</tspan>
-                        <tspan dx=".25em" dy="2px" fill="#dadada" fontSize={12} fontWeight="normal">
-                            {' '}
-                            |{' '}
-                        </tspan>
-                        <tspan dx=".25em" dy="-2px">
-                            {capitalizeFirstLetter(node.data.subtype || node.data.type)}
+                        {platformDisplayText && (
+                            <>
+                                <tspan>{getShortenedTitle(platformDisplayText || '', width)}</tspan>
+                                <tspan dx=".25em" dy="2px" fill="#dadada" fontSize={12} fontWeight="normal">
+                                    {' '}
+                                    |{' '}
+                                </tspan>
+                            </>
+                        )}
+                        <tspan dx=".25em" dy="-2px" data-testid={entityName}>
+                            {entityName}
                         </tspan>
                     </UnselectableText>
-                    <UnselectableText
-                        dy="1em"
-                        x={textX}
-                        fontSize={14}
-                        fontFamily="Manrope"
-                        textAnchor="start"
-                        fill={isCenterNode ? '#1890FF' : 'black'}
-                    >
-                        {truncate(getLastTokenOfTitle(node.data.name), 16)}
-                    </UnselectableText>
+                    {expandTitles ? (
+                        <foreignObject x={textX} width="125" height="200">
+                            <MultilineTitleText>{node.data.expandedName || node.data.name}</MultilineTitleText>
+                        </foreignObject>
+                    ) : (
+                        <UnselectableText
+                            dy="1em"
+                            x={textX}
+                            fontSize={14}
+                            fontFamily="Manrope"
+                            textAnchor="start"
+                            fill={isCenterNode ? '#1890FF' : 'black'}
+                        >
+                            {getShortenedTitle(node.data.name, width)}
+                        </UnselectableText>
+                    )}
+                    <foreignObject x={healthX} y={healthY} width="20" height="20">
+                        {hasHealth && (
+                            <EntityHealth
+                                health={health as any}
+                                baseUrl={baseUrl as any}
+                                fontSize={20}
+                                tooltipPlacement="top"
+                            />
+                        )}
+                    </foreignObject>
                 </Group>
                 {unexploredHiddenChildren && isHovered ? (
                     <UnselectableText
@@ -277,6 +404,9 @@ export default function LineageEntityNode({
                         {unexploredHiddenChildren > 1 ? 'dependencies' : 'dependency'}
                     </UnselectableText>
                 ) : null}
+                {showColumns && (node.data.schemaMetadata || node.data.inputFields) && (
+                    <LineageEntityColumns node={node} onHover={onHover} />
+                )}
             </Group>
         </PointerGroup>
     );

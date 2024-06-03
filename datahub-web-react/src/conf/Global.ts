@@ -5,18 +5,31 @@ export enum PageRoutes {
     /**
      * Server-side authentication route
      */
+    ROOT = '/',
     AUTHENTICATE = '/authenticate',
+    SIGN_UP = '/signup',
     LOG_IN = '/login',
+    RESET_CREDENTIALS = '/reset',
     SEARCH_RESULTS = '/search/:type?',
     SEARCH = '/search',
     BROWSE = '/browse',
     BROWSE_RESULTS = '/browse/:type',
     DATASETS = '/datasets',
-    ASSETS = '/assets',
     ANALYTICS = '/analytics',
     POLICIES = '/policies',
+    SETTINGS_POLICIES = '/settings/policies',
+    PERMISSIONS = '/permissions',
     IDENTITIES = '/identities',
+    INGESTION = '/ingestion',
     SETTINGS = '/settings',
+    DOMAINS = '/domains',
+    DOMAIN = '/domain',
+    GLOSSARY = '/glossary',
+    SETTINGS_VIEWS = '/settings/views',
+    EMBED = '/embed',
+    EMBED_LOOKUP = '/embed/lookup/:url',
+    SETTINGS_POSTS = '/settings/posts',
+    BUSINESS_ATTRIBUTE = '/business-attribute',
 }
 
 /**

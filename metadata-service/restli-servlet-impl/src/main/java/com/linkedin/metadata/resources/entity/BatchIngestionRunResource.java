@@ -1,132 +1,202 @@
 package com.linkedin.metadata.resources.entity;
 
+import static com.linkedin.metadata.authorization.ApiGroup.ENTITY;
+import static com.linkedin.metadata.authorization.ApiGroup.TIMESERIES;
+import static com.linkedin.metadata.authorization.ApiOperation.MANAGE;
+import static com.linkedin.metadata.authorization.ApiOperation.READ;
+import static com.linkedin.metadata.authorization.ApiOperation.UPDATE;
+import static com.linkedin.metadata.service.RollbackService.ROLLBACK_FAILED_STATUS;
+
 import com.codahale.metrics.MetricRegistry;
+import com.datahub.authentication.Authentication;
+import com.datahub.authentication.AuthenticationContext;
+import com.datahub.authentication.AuthenticationException;
+import com.datahub.authorization.AuthUtil;
+import com.datahub.plugins.auth.authorization.Authorizer;
+import com.linkedin.common.urn.Urn;
+import com.linkedin.common.urn.UrnUtils;
+import com.linkedin.entity.EnvelopedAspect;
 import com.linkedin.metadata.aspect.VersionedAspect;
 import com.linkedin.metadata.entity.EntityService;
-import com.linkedin.metadata.entity.RollbackRunResult;
 import com.linkedin.metadata.restli.RestliUtil;
 import com.linkedin.metadata.run.AspectRowSummary;
 import com.linkedin.metadata.run.AspectRowSummaryArray;
+import com.linkedin.metadata.run.IngestionRunSummary;
 import com.linkedin.metadata.run.IngestionRunSummaryArray;
 import com.linkedin.metadata.run.RollbackResponse;
+import com.linkedin.metadata.service.RollbackService;
 import com.linkedin.metadata.systemmetadata.SystemMetadataService;
 import com.linkedin.parseq.Task;
+import com.linkedin.restli.common.HttpStatus;
+import com.linkedin.restli.server.RestLiServiceException;
 import com.linkedin.restli.server.annotations.Action;
 import com.linkedin.restli.server.annotations.ActionParam;
 import com.linkedin.restli.server.annotations.Optional;
 import com.linkedin.restli.server.annotations.RestLiCollection;
 import com.linkedin.restli.server.resources.CollectionResourceTaskTemplate;
+import io.datahubproject.metadata.context.OperationContext;
+import io.datahubproject.metadata.context.RequestContext;
 import io.opentelemetry.extension.annotations.WithSpan;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import lombok.extern.slf4j.Slf4j;
 
-
-/**
- * resource for showing information and rolling back runs
- */
+/** resource for showing information and rolling back runs */
 @Slf4j
 @RestLiCollection(name = "runs", namespace = "com.linkedin.entity")
-public class BatchIngestionRunResource extends CollectionResourceTaskTemplate<String, VersionedAspect> {
+public class BatchIngestionRunResource
+    extends CollectionResourceTaskTemplate<String, VersionedAspect> {
 
   private static final Integer DEFAULT_OFFSET = 0;
   private static final Integer DEFAULT_PAGE_SIZE = 100;
-  private static final Integer ELASTIC_MAX_PAGE_SIZE = 10000;
-  private static final Integer ELASTIC_BATCH_DELETE_SLEEP_SEC = 5;
+  private static final boolean DEFAULT_INCLUDE_SOFT_DELETED = false;
+  private static final boolean DEFAULT_HARD_DELETE = false;
 
   @Inject
   @Named("systemMetadataService")
-  private SystemMetadataService _systemMetadataService;
+  private SystemMetadataService systemMetadataService;
 
   @Inject
   @Named("entityService")
-  private EntityService _entityService;
+  private EntityService<?> entityService;
 
-  /**
-   * Rolls back an ingestion run
-   */
+  @Inject
+  @Named("rollbackService")
+  private RollbackService rollbackService;
+
+    @Inject
+    @Named("authorizerChain")
+    private Authorizer authorizer;
+
+    @Inject
+    @Named("systemOperationContext")
+    private OperationContext systemOperationContext;
+
+  /** Rolls back an ingestion run */
   @Action(name = "rollback")
   @Nonnull
   @WithSpan
   public Task<RollbackResponse> rollback(
       @ActionParam("runId") @Nonnull String runId,
-      @ActionParam("dryRun") @Optional @Nullable Boolean dryRun
-  ) {
+      @ActionParam("dryRun") @Optional Boolean dryRun,
+      @Deprecated @ActionParam("hardDelete") @Optional Boolean hardDelete,
+      @ActionParam("safe") @Optional Boolean safe)
+      throws Exception {
+
+      Authentication auth = AuthenticationContext.getAuthentication();
+      if (!AuthUtil.isAPIAuthorized(
+              auth,
+              authorizer,
+              ENTITY, MANAGE)) {
+          throw new RestLiServiceException(
+                  HttpStatus.S_403_FORBIDDEN, "User is unauthorized to update entity");
+      }
+      final OperationContext opContext = OperationContext.asSession(
+              systemOperationContext, RequestContext.builder().buildRestli("rollback", List.of()), authorizer, auth, true);
+
     log.info("ROLLBACK RUN runId: {} dry run: {}", runId, dryRun);
-    return RestliUtil.toTask(() -> {
-      RollbackResponse response = new RollbackResponse();
-      List<AspectRowSummary> aspectRowsToDelete;
-      aspectRowsToDelete = _systemMetadataService.findByRunId(runId);
 
-      log.info("found {} rows to delete...", stringifyRowCount(aspectRowsToDelete.size()));
-      if (dryRun) {
-        response.setAspectsAffected(aspectRowsToDelete.size());
-        response.setEntitiesAffected(aspectRowsToDelete.stream().filter(row -> row.isKeyAspect()).count());
-        response.setAspectRowSummaries(
-            new AspectRowSummaryArray(aspectRowsToDelete.subList(0, Math.min(100, aspectRowsToDelete.size())))
-        );
-        return response;
-      }
+    boolean doHardDelete =
+        safe != null ? !safe : hardDelete != null ? hardDelete : DEFAULT_HARD_DELETE;
 
-      RollbackRunResult rollbackRunResult = _entityService.rollbackRun(aspectRowsToDelete, runId);
-      List<AspectRowSummary> deletedRows = rollbackRunResult.getRowsRolledBack();
-      Integer rowsDeletedFromEntityDeletion = rollbackRunResult.getRowsDeletedFromEntityDeletion();
-
-      // since elastic limits how many rows we can access at once, we need to iteratively delete
-      while (aspectRowsToDelete.size() >= ELASTIC_MAX_PAGE_SIZE) {
-        sleep(ELASTIC_BATCH_DELETE_SLEEP_SEC);
-        aspectRowsToDelete = _systemMetadataService.findByRunId(runId);
-        log.info("{} remaining rows to delete...", stringifyRowCount(aspectRowsToDelete.size()));
-        log.info("deleting...");
-        rollbackRunResult = _entityService.rollbackRun(aspectRowsToDelete, runId);
-        deletedRows.addAll(rollbackRunResult.getRowsRolledBack());
-        rowsDeletedFromEntityDeletion += rollbackRunResult.getRowsDeletedFromEntityDeletion();
-      }
-
-      log.info("finished deleting {} rows", deletedRows.size());
-      response.setAspectsAffected(deletedRows.size() + rowsDeletedFromEntityDeletion);
-      response.setEntitiesAffected(deletedRows.stream().filter(row -> row.isKeyAspect()).count());
-      response.setAspectRowSummaries(
-          new AspectRowSummaryArray(deletedRows.subList(0, Math.min(100, deletedRows.size())))
-      );
-      return response;
-    }, MetricRegistry.name(this.getClass(), "rollback"));
-  }
-
-  private String stringifyRowCount(int size) {
-    if (size < ELASTIC_MAX_PAGE_SIZE) {
-      return String.valueOf(size);
-    } else {
-      return "at least " + String.valueOf(size);
+    if (safe != null && hardDelete != null) {
+      log.warn(
+          "Both Safe & hardDelete flags were defined, honouring safe flag as hardDelete is deprecated");
     }
-  }
-
-  private void sleep(Integer seconds) {
     try {
-      TimeUnit.SECONDS.sleep(seconds);
-    } catch (InterruptedException e) {
-      e.printStackTrace();
+      return RestliUtil.toTask(
+          () -> {
+
+              try {
+                  return rollbackService.rollbackIngestion(opContext, runId, dryRun, doHardDelete, authorizer);
+              } catch (AuthenticationException authException) {
+                  throw new RestLiServiceException(
+                          HttpStatus.S_403_FORBIDDEN, authException.getMessage());
+              }
+          },
+          MetricRegistry.name(this.getClass(), "rollback"));
+    } catch (Exception e) {
+      rollbackService.updateExecutionRequestStatus(opContext, runId, ROLLBACK_FAILED_STATUS);
+      throw new RuntimeException(
+          String.format("There was an issue rolling back ingestion run with runId %s", runId), e);
     }
   }
 
-  /**
-   * Retrieves the value for an entity that is made up of latest versions of specified aspects.
-   */
+  /** Retrieves the ingestion run summaries. */
   @Action(name = "list")
   @Nonnull
   @WithSpan
   public Task<IngestionRunSummaryArray> list(
       @ActionParam("pageOffset") @Optional @Nullable Integer pageOffset,
-      @ActionParam("pageSize") @Optional @Nullable Integer pageSize
-  ) {
+      @ActionParam("pageSize") @Optional @Nullable Integer pageSize,
+      @ActionParam("includeSoft") @Optional @Nullable Boolean includeSoft) {
     log.info("LIST RUNS offset: {} size: {}", pageOffset, pageSize);
 
-    return RestliUtil.toTask(() -> new IngestionRunSummaryArray(
-        _systemMetadataService.listRuns(pageOffset != null ? pageOffset : DEFAULT_OFFSET,
-            pageSize != null ? pageSize : DEFAULT_PAGE_SIZE)), MetricRegistry.name(this.getClass(), "list"));
+    return RestliUtil.toTask(
+        () -> {
+          List<IngestionRunSummary> summaries =
+              systemMetadataService.listRuns(
+                  pageOffset != null ? pageOffset : DEFAULT_OFFSET,
+                  pageSize != null ? pageSize : DEFAULT_PAGE_SIZE,
+                  includeSoft != null ? includeSoft : DEFAULT_INCLUDE_SOFT_DELETED);
+
+          return new IngestionRunSummaryArray(summaries);
+        },
+        MetricRegistry.name(this.getClass(), "list"));
+  }
+
+  @Action(name = "describe")
+  @Nonnull
+  @WithSpan
+  public Task<AspectRowSummaryArray> describe(
+      @ActionParam("runId") @Nonnull String runId,
+      @ActionParam("start") Integer start,
+      @ActionParam("count") Integer count,
+      @ActionParam("includeSoft") @Optional @Nullable Boolean includeSoft,
+      @ActionParam("includeAspect") @Optional @Nullable Boolean includeAspect) {
+    log.info("DESCRIBE RUN runId: {}, start: {}, count: {}", runId, start, count);
+
+    return RestliUtil.toTask(
+        () -> {
+
+            Authentication auth = AuthenticationContext.getAuthentication();
+            if (!AuthUtil.isAPIAuthorized(
+                    auth,
+                    authorizer,
+                    ENTITY, READ)) {
+                throw new RestLiServiceException(
+                        HttpStatus.S_403_FORBIDDEN, "User is unauthorized to get entity");
+            }
+            final OperationContext opContext = OperationContext.asSession(
+                    systemOperationContext, RequestContext.builder().buildRestli("describe", List.of()), authorizer, auth, true);
+
+          List<AspectRowSummary> summaries =
+              systemMetadataService.findByRunId(
+                  runId, includeSoft != null && includeSoft, start, count);
+
+          if (includeAspect != null && includeAspect) {
+            summaries.forEach(
+                summary -> {
+                  Urn urn = UrnUtils.getUrn(summary.getUrn());
+                  try {
+                    EnvelopedAspect aspect =
+                        entityService.getLatestEnvelopedAspect(opContext,
+                            urn.getEntityType(), urn, summary.getAspectName());
+                    if (aspect == null) {
+                      log.error("Aspect for summary {} not found", summary);
+                    } else {
+                      summary.setAspect(aspect.getValue());
+                    }
+                  } catch (Exception e) {
+                    log.error("Error while fetching aspect for summary {}", summary, e);
+                  }
+                });
+          }
+          return new AspectRowSummaryArray(summaries);
+        },
+        MetricRegistry.name(this.getClass(), "describe"));
   }
 }

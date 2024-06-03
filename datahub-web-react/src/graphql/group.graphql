@@ -3,12 +3,53 @@ query getGroup($urn: String!, $membersCount: Int!) {
         urn
         type
         name
+        exists
+        origin {
+            type
+            externalType
+        }
         info {
             displayName
             description
             email
         }
-        relationships(input: { types: ["IsMemberOfGroup"], direction: INCOMING, start: 0, count: $membersCount }) {
+        editableProperties {
+            description
+            slack
+            email
+            pictureLink
+        }
+        properties {
+            displayName
+            description
+            email
+            slack
+        }
+        privileges {
+            ...entityPrivileges
+        }
+        autoRenderAspects: aspects(input: { autoRenderOnly: true }) {
+            ...autoRenderAspectFields
+        }
+        structuredProperties {
+            properties {
+                ...structuredPropertiesFields
+            }
+        }
+        forms {
+            ...formsFields
+        }
+        ownership {
+            ...ownershipFields
+        }
+        relationships(
+            input: {
+                types: ["IsMemberOfGroup", "IsMemberOfNativeGroup"]
+                direction: INCOMING
+                start: 0
+                count: $membersCount
+            }
+        ) {
             start
             count
             total
@@ -25,7 +66,50 @@ query getGroup($urn: String!, $membersCount: Int!) {
                             lastName
                             fullName
                         }
-                        editableInfo {
+                        editableProperties {
+                            displayName
+                            title
+                            pictureLink
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+query getAllGroupMembers($urn: String!, $start: Int!, $count: Int!) {
+    corpGroup(urn: $urn) {
+        relationships(
+            input: {
+                types: ["IsMemberOfGroup", "IsMemberOfNativeGroup"]
+                direction: INCOMING
+                start: $start
+                count: $count
+            }
+        ) {
+            start
+            count
+            total
+            relationships {
+                entity {
+                    ... on CorpUser {
+                        urn
+                        username
+                        info {
+                            active
+                            displayName
+                            title
+                            firstName
+                            lastName
+                            fullName
+                        }
+                        properties {
+                            displayName
+                        }
+                        editableProperties {
+                            displayName
+                            title
                             pictureLink
                         }
                     }
@@ -54,7 +138,46 @@ query getGroupMembers($urn: String!, $start: Int!, $count: Int!) {
                             lastName
                             fullName
                         }
-                        editableInfo {
+                        properties {
+                            displayName
+                        }
+                        editableProperties {
+                            displayName
+                            title
+                            pictureLink
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+query getNativeGroupMembers($urn: String!, $start: Int!, $count: Int!) {
+    corpGroup(urn: $urn) {
+        relationships(input: { types: ["IsMemberOfNativeGroup"], direction: INCOMING, start: $start, count: $count }) {
+            start
+            count
+            total
+            relationships {
+                entity {
+                    ... on CorpUser {
+                        urn
+                        username
+                        info {
+                            active
+                            displayName
+                            title
+                            firstName
+                            lastName
+                            fullName
+                        }
+                        properties {
+                            displayName
+                        }
+                        editableProperties {
+                            displayName
+                            title
                             pictureLink
                         }
                     }
@@ -73,13 +196,33 @@ query listGroups($input: ListGroupsInput!) {
             urn
             type
             name
+            origin {
+                type
+                externalType
+            }
             info {
                 displayName
                 description
                 email
             }
-            memberCount: relationships(input: { types: ["IsMemberOfGroup"], direction: INCOMING, start: 0, count: 1 }) {
+            editableProperties {
+                pictureLink
+            }
+            memberCount: relationships(
+                input: { types: ["IsMemberOfGroup", "IsMemberOfNativeGroup"], direction: INCOMING, start: 0, count: 1 }
+            ) {
                 total
+            }
+            roles: relationships(input: { types: ["IsMemberOfRole"], direction: OUTGOING, start: 0 }) {
+                relationships {
+                    entity {
+                        ... on DataHubRole {
+                            urn
+                            type
+                            name
+                        }
+                    }
+                }
             }
         }
     }
@@ -99,4 +242,10 @@ mutation removeGroup($urn: String!) {
 
 mutation createGroup($input: CreateGroupInput!) {
     createGroup(input: $input)
+}
+
+mutation updateCorpGroupProperties($urn: String!, $input: CorpGroupUpdateInput!) {
+    updateCorpGroupProperties(urn: $urn, input: $input) {
+        urn
+    }
 }

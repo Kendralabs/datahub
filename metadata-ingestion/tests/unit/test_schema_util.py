@@ -1,16 +1,26 @@
+import json
 import logging
 import os
 import re
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Type
 
 import pytest
+from freezegun import freeze_time
 
+from datahub.emitter.mce_builder import (
+    make_global_tag_aspect_with_tag_list,
+    make_glossary_terms_aspect_from_urn_list,
+)
 from datahub.ingestion.extractor.schema_util import avro_schema_to_mce_fields
 from datahub.metadata.com.linkedin.pegasus2avro.schema import (
+    DateTypeClass,
+    NumberTypeClass,
     SchemaField,
     StringTypeClass,
+    TimeTypeClass,
 )
+from datahub.utilities.mapping import OperationProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +69,25 @@ SCHEMA_WITH_OPTIONAL_FIELD_VIA_PRIMITIVE_TYPE = """
 }
 """
 
+SCHEMA_WITH_OPTIONAL_FIELD_VIA_FIXED_TYPE: str = json.dumps(
+    {
+        "type": "record",
+        "name": "__struct_",
+        "fields": [
+            {
+                "name": "value",
+                "type": {
+                    "type": "fixed",
+                    "name": "__fixed_d9d2d051916045d9975d6c573aaabb89",
+                    "size": 4,
+                    "native_data_type": "fixed[4]",
+                    "_nullable": True,
+                },
+            },
+        ],
+    }
+)
+
 
 def log_field_paths(fields: List[SchemaField]) -> None:
     logger.debug('FieldPaths=\n"' + '",\n"'.join(f.fieldPath for f in fields) + '"')
@@ -73,7 +102,7 @@ def assert_field_paths_are_unique(fields: List[SchemaField]) -> None:
         assert len(avro_fields_paths) == len(set(avro_fields_paths))
 
 
-def assret_field_paths_match(
+def assert_field_paths_match(
     fields: List[SchemaField], expected_field_paths: List[str]
 ) -> None:
     log_field_paths(fields)
@@ -89,11 +118,13 @@ def assret_field_paths_match(
         SCHEMA_WITH_OPTIONAL_FIELD_VIA_UNION_TYPE,
         SCHEMA_WITH_OPTIONAL_FIELD_VIA_UNION_TYPE_NULL_ISNT_FIRST_IN_UNION,
         SCHEMA_WITH_OPTIONAL_FIELD_VIA_PRIMITIVE_TYPE,
+        SCHEMA_WITH_OPTIONAL_FIELD_VIA_FIXED_TYPE,
     ],
     ids=[
         "optional_field_via_union_type",
         "optional_field_via_union_null_not_first",
         "optional_field_via_primitive",
+        "optional_field_via_fixed",
     ],
 )
 def test_avro_schema_to_mce_fields_events_with_nullable_fields(schema):
@@ -123,7 +154,7 @@ def test_avro_schema_to_mce_fields_sample_events_with_different_field_types():
     expected_field_paths = [
         "[version=2.0].[type=R].[type=map].[type=long].a_map_of_longs_field",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_avro_schema_to_mce_fields_record_with_two_fields():
@@ -151,7 +182,7 @@ def test_avro_schema_to_mce_fields_record_with_two_fields():
         "[version=2.0].[type=name].[type=string].a",
         "[version=2.0].[type=name].[type=string].b",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_avro_schema_to_mce_fields_toplevel_isnt_a_record():
@@ -162,7 +193,7 @@ def test_avro_schema_to_mce_fields_toplevel_isnt_a_record():
 """
     fields = avro_schema_to_mce_fields(schema)
     expected_field_paths = ["[version=2.0].[type=string]"]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_avro_schema_namespacing():
@@ -185,7 +216,7 @@ def test_avro_schema_namespacing():
     expected_field_paths = [
         "[version=2.0].[type=name].[type=string].aStringField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_avro_schema_to_mce_fields_with_default():
@@ -208,7 +239,7 @@ def test_avro_schema_to_mce_fields_with_default():
     expected_field_paths = [
         "[version=2.0].[type=name].[type=string].aStringField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
     description = fields[0].description
     assert description and "custom, default value" in description
 
@@ -235,7 +266,7 @@ def test_avro_schema_with_recursion():
         "[version=2.0].[type=TreeNode].[type=long].value",
         "[version=2.0].[type=TreeNode].[type=array].[type=TreeNode].children",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_avro_sample_payment_schema_to_mce_fields_with_nesting():
@@ -246,15 +277,17 @@ def test_avro_sample_payment_schema_to_mce_fields_with_nesting():
   "namespace": "some.event.namespace",
   "fields": [
     {"name": "id", "type": "string"},
-    {"name": "amount", "type": "double"},
+    {"name": "amount", "type": "double", "doc": "amountDoc"},
     {"name": "name","type": "string","default": ""},
     {"name": "phoneNumber",
      "type": [{
          "type": "record",
          "name": "PhoneNumber",
+         "doc": "testDoc",
          "fields": [{
              "name": "areaCode",
              "type": "string",
+             "doc": "areaCodeDoc",
              "default": ""
              }, {
              "name": "countryCode",
@@ -273,6 +306,21 @@ def test_avro_sample_payment_schema_to_mce_fields_with_nesting():
          "null"
      ],
      "default": "null"
+    },
+    {"name": "address",
+     "type": [{
+         "type": "record",
+         "name": "Address",
+         "fields": [{
+             "name": "street",
+             "type": "string",
+             "default": ""
+             }]
+         },
+         "null"
+     ],
+      "doc": "addressDoc",
+     "default": "null"
     }
   ]
 }
@@ -287,8 +335,14 @@ def test_avro_sample_payment_schema_to_mce_fields_with_nesting():
         "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].countryCode",
         "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].prefix",
         "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].number",
+        "[version=2.0].[type=Payment].[type=Address].address",
+        "[version=2.0].[type=Payment].[type=Address].address.[type=string].street",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
+    assert fields[1].description == "amountDoc"
+    assert fields[3].description == "testDoc\nField default value: null"
+    assert fields[4].description == "areaCodeDoc\nField default value: "
+    assert fields[8].description == "addressDoc\nField default value: null"
 
 
 def test_avro_schema_to_mce_fields_with_nesting_across_records():
@@ -322,7 +376,7 @@ def test_avro_schema_to_mce_fields_with_nesting_across_records():
         "[version=2.0].[type=union].[type=Person].[type=string].lastname",
         "[version=2.0].[type=union].[type=Person].[type=Address].address",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_simple_record_with_primitive_types():
@@ -357,7 +411,7 @@ def test_simple_record_with_primitive_types():
         "[version=2.0].[type=Simple].[type=int].intField",
         "[version=2.0].[type=Simple].[type=enum].enumField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_simple_nested_record_with_a_string_field_for_key_schema():
@@ -384,7 +438,7 @@ def test_simple_nested_record_with_a_string_field_for_key_schema():
         "[version=2.0].[key=True].[type=SimpleNested].[type=InnerRcd].nestedRcd",
         "[version=2.0].[key=True].[type=SimpleNested].[type=InnerRcd].nestedRcd.[type=string].aStringField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_union_with_nested_record_of_union():
@@ -420,7 +474,7 @@ def test_union_with_nested_record_of_union():
         "[version=2.0].[type=UnionSample].[type=union].[type=Rcd].aUnion",
         "[version=2.0].[type=UnionSample].[type=union].[type=Rcd].aUnion.[type=string].aNullableStringField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
     assert isinstance(fields[3].type.type, StringTypeClass)
     assert fields[0].nativeDataType == "union"
     assert fields[1].nativeDataType == "boolean"
@@ -461,7 +515,7 @@ def test_nested_arrays():
         "[version=2.0].[type=NestedArray].[type=array].[type=array].[type=Foo].ar",
         "[version=2.0].[type=NestedArray].[type=array].[type=array].[type=Foo].ar.[type=long].a",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_map_of_union_of_int_and_record_of_union():
@@ -498,7 +552,7 @@ def test_map_of_union_of_int_and_record_of_union():
         "[version=2.0].[type=MapSample].[type=map].[type=union].[type=Rcd].aMap.[type=union].[type=string].aUnion",
         "[version=2.0].[type=MapSample].[type=map].[type=union].[type=Rcd].aMap.[type=union].[type=int].aUnion",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_recursive_avro():
@@ -526,7 +580,7 @@ def test_recursive_avro():
         "[version=2.0].[type=Recursive].[type=R].r.[type=int].anIntegerField",
         "[version=2.0].[type=Recursive].[type=R].r.[type=R].aRecursiveField",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_needs_disambiguation_nested_union_of_records_with_same_field_name():
@@ -572,7 +626,7 @@ def test_needs_disambiguation_nested_union_of_records_with_same_field_name():
         "[version=2.0].[type=ABFooUnion].[type=union].[type=array].[type=array].[type=Foo].a",
         "[version=2.0].[type=ABFooUnion].[type=union].[type=array].[type=array].[type=Foo].a.[type=long].f",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
 
 
 def test_mce_avro_parses_okay():
@@ -639,12 +693,12 @@ def test_key_schema_handling():
         "[version=2.0].[key=True].[type=ABFooUnion].[type=union].[type=array].[type=array].[type=Foo].a",
         "[version=2.0].[key=True].[type=ABFooUnion].[type=union].[type=array].[type=array].[type=Foo].a.[type=long].f",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
     for f in fields:
         assert f.isPartOfKey
 
 
-def test_logical_types():
+def test_logical_types_bare():
     schema: str = """
 {
     "type": "record",
@@ -661,6 +715,7 @@ def test_logical_types():
 }
     """
     fields: List[SchemaField] = avro_schema_to_mce_fields(schema, is_key_schema=False)
+    # validate field paths
     expected_field_paths: List[str] = [
         "[version=2.0].[type=test_logical_types].[type=bytes].decimal_logical",
         "[version=2.0].[type=test_logical_types].[type=string].uuid_logical",
@@ -670,7 +725,45 @@ def test_logical_types():
         "[version=2.0].[type=test_logical_types].[type=long].timestamp_millis_logical",
         "[version=2.0].[type=test_logical_types].[type=long].timestamp_micros_logical",
     ]
-    assret_field_paths_match(fields, expected_field_paths)
+    assert_field_paths_match(fields, expected_field_paths)
+
+    # validate field types.
+    expected_types: List[Type] = [
+        NumberTypeClass,
+        StringTypeClass,
+        DateTypeClass,
+        TimeTypeClass,
+        TimeTypeClass,
+        TimeTypeClass,
+        TimeTypeClass,
+    ]
+    assert expected_types == [type(field.type.type) for field in fields]
+
+
+def test_logical_types_fully_specified_in_type():
+    schema: Dict = {
+        "type": "record",
+        "name": "test",
+        "fields": [
+            {
+                "name": "name",
+                "type": {
+                    "type": "bytes",
+                    "logicalType": "decimal",
+                    "precision": 3,
+                    "scale": 2,
+                    "native_data_type": "decimal(3, 2)",
+                    "_nullable": True,
+                },
+            }
+        ],
+    }
+    fields: List[SchemaField] = avro_schema_to_mce_fields(
+        json.dumps(schema), default_nullable=True
+    )
+    assert len(fields) == 1
+    assert "[version=2.0].[type=test].[type=bytes].name" == fields[0].fieldPath
+    assert isinstance(fields[0].type.type, NumberTypeClass)
 
 
 def test_ignore_exceptions():
@@ -684,3 +777,106 @@ def test_ignore_exceptions():
 """
     fields: List[SchemaField] = avro_schema_to_mce_fields(malformed_schema)
     assert not fields
+
+
+@freeze_time("2023-09-12")
+def test_avro_schema_to_mce_fields_with_field_meta_mapping():
+    schema = """
+{
+  "type": "record",
+  "name": "Payment",
+  "namespace": "some.event.namespace",
+  "fields": [
+    {"name": "id", "type": "string"},
+    {"name": "amount", "type": "double", "doc": "amountDoc","has_pii": "False"},
+    {"name": "name","type": "string","default": "","has_pii": "True"},
+    {"name": "phoneNumber",
+     "type": [{
+         "type": "record",
+         "name": "PhoneNumber",
+         "doc": "testDoc",
+         "fields": [{
+             "name": "areaCode",
+             "type": "string",
+             "doc": "areaCodeDoc",
+             "default": ""
+             }, {
+             "name": "countryCode",
+             "type": "string",
+             "default": ""
+             }, {
+             "name": "prefix",
+             "type": "string",
+             "default": ""
+             }, {
+             "name": "number",
+             "type": "string",
+             "default": ""
+             }]
+         },
+         "null"
+     ],
+     "default": "null",
+     "has_pii": "True",
+     "glossary_field": "TERM_PhoneNumber"
+    },
+    {"name": "address",
+     "type": [{
+         "type": "record",
+         "name": "Address",
+         "fields": [{
+             "name": "street",
+             "type": "string",
+             "default": ""
+             }]
+         },
+         "null"
+     ],
+      "doc": "addressDoc",
+      "default": "null",
+      "has_pii": "True",
+      "glossary_field": "TERM_Address"
+    }
+  ]
+}
+"""
+    processor = OperationProcessor(
+        operation_defs={
+            "has_pii": {
+                "match": "True",
+                "operation": "add_tag",
+                "config": {"tag": "has_pii_test"},
+            },
+            "glossary_field": {
+                "match": "TERM_(.*)",
+                "operation": "add_term",
+                "config": {"term": "{{ $match }}"},
+            },
+        }
+    )
+    fields = avro_schema_to_mce_fields(schema, meta_mapping_processor=processor)
+    expected_field_paths = [
+        "[version=2.0].[type=Payment].[type=string].id",
+        "[version=2.0].[type=Payment].[type=double].amount",
+        "[version=2.0].[type=Payment].[type=string].name",
+        "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber",
+        "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].areaCode",
+        "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].countryCode",
+        "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].prefix",
+        "[version=2.0].[type=Payment].[type=PhoneNumber].phoneNumber.[type=string].number",
+        "[version=2.0].[type=Payment].[type=Address].address",
+        "[version=2.0].[type=Payment].[type=Address].address.[type=string].street",
+    ]
+    assert_field_paths_match(fields, expected_field_paths)
+
+    pii_tag_aspect = make_global_tag_aspect_with_tag_list(["has_pii_test"])
+    assert fields[1].globalTags is None
+    assert fields[2].globalTags == pii_tag_aspect
+    assert fields[3].globalTags == pii_tag_aspect
+    assert fields[3].glossaryTerms == make_glossary_terms_aspect_from_urn_list(
+        ["urn:li:glossaryTerm:PhoneNumber"]
+    )
+    assert fields[8].globalTags == pii_tag_aspect
+    assert fields[8].glossaryTerms == make_glossary_terms_aspect_from_urn_list(
+        ["urn:li:glossaryTerm:Address"]
+    )

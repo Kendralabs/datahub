@@ -1,22 +1,22 @@
 import { Typography, Modal, Button, Form } from 'antd';
 import React, { useState } from 'react';
 import styled from 'styled-components';
-import MDEditor from '@uiw/react-md-editor';
-
-const DescriptionMarkdown = styled(MDEditor.Markdown)`
-    padding: 4px 10px;
-`;
+import { Editor } from '../../tabs/Documentation/components/editor/Editor';
+import { ANTD_GRAY } from '../../constants';
 
 const FormLabel = styled(Typography.Text)`
     font-size: 10px;
     font-weight: bold;
 `;
 
-const MarkDownHelpLink = styled(Typography.Link)`
-    position: absolute;
-    right: 0;
-    top: -18px;
-    font-size: 12px;
+const StyledEditor = styled(Editor)`
+    border: 1px solid ${ANTD_GRAY[4.5]};
+`;
+
+const StyledViewer = styled(Editor)`
+    .remirror-editor.ProseMirror {
+        padding: 0;
+    }
 `;
 
 type Props = {
@@ -24,12 +24,23 @@ type Props = {
     description?: string | undefined;
     original?: string | undefined;
     onClose: () => void;
-    onSubmit: (description: string | null) => void;
+    onSubmit: (description: string) => void;
     isAddDesc?: boolean;
 };
 
 export default function UpdateDescriptionModal({ title, description, original, onClose, onSubmit, isAddDesc }: Props) {
     const [updatedDesc, setDesc] = useState(description || original || '');
+
+    const handleEditorKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (
+            event.key === 'ArrowDown' ||
+            event.key === 'ArrowUp' ||
+            event.key === 'ArrowRight' ||
+            event.key === 'ArrowLeft'
+        ) {
+            event.stopPropagation();
+        }
+    };
 
     return (
         <Modal
@@ -41,43 +52,28 @@ export default function UpdateDescriptionModal({ title, description, original, o
             footer={
                 <>
                     <Button onClick={onClose}>Cancel</Button>
-                    <Button onClick={() => onSubmit(updatedDesc)} disabled={updatedDesc === description}>
+                    <Button
+                        onClick={() => onSubmit(updatedDesc)}
+                        disabled={updatedDesc === description}
+                        data-testid="description-modal-update-button"
+                    >
                         Update
                     </Button>
                 </>
             }
         >
             <Form layout="vertical">
-                {isAddDesc ? (
-                    <Form.Item>
-                        <MarkDownHelpLink href="https://joplinapp.org/markdown" target="_blank" type="secondary">
-                            markdown supported
-                        </MarkDownHelpLink>
-                        <MDEditor
-                            style={{ fontWeight: 400 }}
-                            value={updatedDesc}
-                            onChange={(v) => setDesc(v || '')}
-                            preview="live"
-                            height={400}
-                        />
-                    </Form.Item>
-                ) : (
-                    <Form.Item>
-                        <MarkDownHelpLink href="https://joplinapp.org/markdown" target="_blank" type="secondary">
-                            markdown supported
-                        </MarkDownHelpLink>
-                        <MDEditor
-                            style={{ fontWeight: 400 }}
-                            value={updatedDesc}
-                            onChange={(v) => setDesc(v || '')}
-                            preview="live"
-                            height={400}
-                        />
-                    </Form.Item>
-                )}
+                <Form.Item>
+                    <StyledEditor
+                        content={updatedDesc}
+                        onChange={setDesc}
+                        dataTestId="description-editor"
+                        onKeyDown={handleEditorKeyDown}
+                    />
+                </Form.Item>
                 {!isAddDesc && description && original && (
                     <Form.Item label={<FormLabel>Original:</FormLabel>}>
-                        <DescriptionMarkdown source={original || ''} />
+                        <StyledViewer content={original || ''} readOnly />
                     </Form.Item>
                 )}
             </Form>

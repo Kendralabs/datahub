@@ -20,11 +20,9 @@ public class RestliLoggingFilter implements Filter {
     return CompletableFuture.completedFuture(null);
   }
 
-
   @Override
   public CompletableFuture<Void> onResponse(
-      final FilterRequestContext requestContext,
-      final FilterResponseContext responseContext) {
+      final FilterRequestContext requestContext, final FilterResponseContext responseContext) {
     logResponse(requestContext, responseContext);
     return CompletableFuture.completedFuture(null);
   }
@@ -35,13 +33,12 @@ public class RestliLoggingFilter implements Filter {
       final FilterRequestContext requestContext,
       final FilterResponseContext responseContext) {
     logResponse(requestContext, responseContext);
-    log.error(th.getMessage());
+    log.error("Rest.li error: ", th);
     return CompletableFuture.completedFuture(null);
   }
 
   private void logResponse(
-      final FilterRequestContext requestContext,
-      final FilterResponseContext responseContext) {
+      final FilterRequestContext requestContext, final FilterResponseContext responseContext) {
     long startTime = (long) requestContext.getFilterScratchpad().get(START_TIME);
     long endTime = System.currentTimeMillis();
     long duration = endTime - startTime;
@@ -52,8 +49,6 @@ public class RestliLoggingFilter implements Filter {
     String method = requestContext.getMethod().getName();
     String uri = requestContext.getRequestURI().toString();
 
-    String logStr = String.format("%s %s - %s - %s - %sms", httpMethod, uri, method, status.getCode(), duration);
-    log.info(logStr);
+    log.info("{} {} - {} - {} - {}ms", httpMethod, uri, method, status.getCode(), duration);
   }
-
 }

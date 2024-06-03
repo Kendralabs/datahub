@@ -1,5 +1,6 @@
 query appConfig {
     appConfig {
+        appVersion
         policiesConfig {
             enabled
             platformPrivileges {
@@ -21,8 +22,52 @@ query appConfig {
         analyticsConfig {
             enabled
         }
+        authConfig {
+            tokenAuthEnabled
+        }
         identityManagementConfig {
             enabled
+        }
+        lineageConfig {
+            supportsImpactAnalysis
+        }
+        managedIngestionConfig {
+            enabled
+        }
+        visualConfig {
+            logoUrl
+            faviconUrl
+            queriesTab {
+                queriesTabResultSize
+            }
+            entityProfiles {
+                domain {
+                    defaultTab
+                }
+            }
+            searchResult {
+                enableNameHighlight
+            }
+        }
+        telemetryConfig {
+            enableThirdPartyLogging
+        }
+        testsConfig {
+            enabled
+        }
+        viewsConfig {
+            enabled
+        }
+        featureFlags {
+            readOnlyModeEnabled
+            showSearchFiltersV2
+            showBrowseV2
+            showAcrylInfo
+            erModelRelationshipFeatureEnabled
+            showAccessManagement
+            nestedDomainsEnabled
+            platformBrowseV2
+            businessAttributeEntityEnabled
         }
     }
 }
@@ -34,4 +79,14 @@ query getEntityCounts($input: EntityCountInput) {
             count
         }
     }
+}
+
+query getGlobalViewsSettings {
+    globalViewsSettings {
+        defaultView
+    }
+}
+
+mutation updateGlobalViewsSettings($input: UpdateGlobalViewsSettingsInput!) {
+    updateGlobalViewsSettings(input: $input)
 }

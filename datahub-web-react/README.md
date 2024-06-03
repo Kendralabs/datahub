@@ -5,15 +5,13 @@ title: "datahub-web-react"
 # DataHub React App
 
 ## About
-This module contains a React version of the DataHub UI. This is now the production version of the DataHub client experience. 
-Notice that this is a completely separate frontend experience from the legacy Ember app and will remain so as it evolves. 
+This module contains a React application that serves as the DataHub UI.
 
 Feel free to take a look around, deploy, and contribute. 
 
-For details about the motivation please see [this RFC](../docs/rfc/active/2055-react-app/README.md). 
 
 ## Functional Goals
-The initial milestone for the app was to achieve functional parity with the existing Ember app. This meant supporting
+The initial milestone for the app was to achieve functional parity with the previous Ember app. This meant supporting
 
 - Dataset Profiles, Search, Browse Experience
 - User Profiles, Search
@@ -22,8 +20,8 @@ The initial milestone for the app was to achieve functional parity with the exis
 This has since been achieved. The new set of functional goals are reflected in the latest version of the [DataHub Roadmap](../docs/roadmap.md). 
 
 ## Design Goals
-In building out the client experience, we intend to leverage learnings from the Ember app and incorporate feedback gathered
-from organizations operating DataHub. Two themes have emerged to serve as guideposts: 
+In building out the client experience, we intend to leverage learnings from the previous Ember-based app and incorporate feedback gathered
+from organizations operating DataHub. Two themes have emerged to serve as guideposts:
 
 1. **Configurability**: The client experience should be configurable, such that deploying organizations can tailor certain 
    aspects to their needs. This includes theme / styling configurability, showing and hiding specific functionality, 
@@ -53,17 +51,21 @@ need to be deployed, still at `http://localhost:9002`, to service GraphQL API re
 
 Optionally you could also start the app with the mock server without running the docker containers by executing `yarn start:mock`. See [here](src/graphql-mock/fixtures/searchResult/userSearchResult.ts#L6) for available login users.
 
+### Testing your customizations
+
+There is two options to test your customizations:
+* **Option 1**: Initialize the docker containers with the `quickstart.sh` script (or if any custom docker-compose file) and then run `yarn start` in this directory. This will start a forwarding server at `localhost:3000` that will use the `datahub-frontend` server at `http://localhost:9002` to fetch real data.
+* **Option 2**: Change the environment variable `REACT_APP_PROXY_TARGET` in the `.env` file to point to your `datahub-frontend` server (ex: https://my_datahub_host.com) and then run `yarn start` in this directory. This will start a forwarding server at `localhost:3000` that will use the `datahub-frontend` server at some domain to fetch real data.
+
+The option 2 is useful if you want to test your React customizations without having to run the hole DataHub stack locally. However, if you changed other components of the DataHub stack, you will need to run the hole stack locally (building the docker images) and use the option 1.
+
 ### Functional testing
 
-Automated functional testing is powered by Cypress and MirageJS. When running the web server with Cypress the port is set to 3010 so that the usual web server running on port 3000 used for development can be started without interruptions.
+In order to start a server and run frontend unit tests using react-testing-framework, run:
 
-#### During development
+`yarn test :e2e`
 
-`yarn test:e2e`
-
-#### CI
-
-`yarn test:e2e:ci`
+There are also more automated tests using Cypress in the `smoke-test` folder of the repository root.
 
 #### Troubleshooting
 `Error: error:0308010C:digital envelope routines::unsupported`: This error message shows up when using Node 17, due to an OpenSSL update related to md5.  
@@ -71,6 +73,14 @@ The best workaround is to revert to the Active LTS version of Node, 16.13.0 with
 
 
 ### Theming
+
+#### Customizing your App without rebuilding assets
+
+To see the results of any change to a theme, you will need to rebuild your datahub-frontend-react container. While this may work for some users, if you don't want to rebuild your container
+you can change two things without rebuilding.
+
+1. You customize the logo on the homepage & the search bar header by setting the `REACT_APP_LOGO_URL` env variable when deploying GMS.
+2. You can customize the favicon (the icon on your browser tab) by setting the `REACT_APP_FAVICON_URL` env var when deploying GMS.
 
 #### Selecting a theme
 
@@ -124,7 +134,9 @@ for functional configurability should reside.
         to render a view associated with a particular entity type (user, dataset, etc.).
   
     
-![entity-registry](./entity-registry.png)
+<p align="center">
+  <img width="70%"  src="https://raw.githubusercontent.com/datahub-project/static-assets/main/imgs/entity-registry.png"/>
+</p>
 
 **graphql** - The React App talks to the `dathub-frontend` server using GraphQL. This module is where the *queries* issued
 against the server are defined. Once defined, running `yarn run generate` will code-gen TypeScript objects to make invoking 
